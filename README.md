@@ -15,7 +15,7 @@ You can then launch the application by running
 npm start
 ```
 
-# Directory Structure instructions:
+# Directory Structure Instructions:
 
 You can choose the working directory by browsing to the appropriate folder. The expected structure of the directory is as follows:
 * It should contain an "images" folder which has the original images.
