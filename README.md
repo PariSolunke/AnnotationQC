@@ -10,10 +10,12 @@ npm install
 npm run build  
 ```
 
-You can then launch the application by running
+You can then launch the application by starting a simple python server in the build folder
 ```
-npm start
+cd build
+python3 -m http.server 8000
 ```
+Once the server is running, navigate to http://localhost:8000/ to use the application
 
 # Directory Structure Instructions:
 
