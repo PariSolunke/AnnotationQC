@@ -36,3 +36,98 @@
     transform: rotate(360deg);
   }
 }
+
+.image-container {
+  position: relative;
+  display: inline-block; /* Keeps the images together */
+  margin: 20px 0; /* Add margin for spacing */
+}
+
+.image-container img {
+  display: block; /* Removes extra space around images */
+  max-width: 600px; /* Ensures the image fits within its container */
+
+}
+
+.annotation-mask {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%; /* Make sure the annotation scales with the original image */
+  height: 100%;
+  opacity: 0.4; /* Opacity can still be controlled dynamically */
+}
+
+button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  margin: 10px;
+  border-radius: 10px; /* Rounded buttons */
+  cursor: pointer;
+  font-size: 16px;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
+button:disabled {
+  background-color: #d6d6d6;
+  cursor: not-allowed;
+}
+
+label {
+  display: block;
+  margin: 20px 0 10px;
+  font-size: 18px;
+}
+
+input[type="range"] {
+  width: 300px;
+  margin-bottom: 20px;
+}
+
+/* Match and Mismatch buttons: same width */
+.evaluation button {
+  width: 150px;
+}
+
+.controls {
+  display: flex;
+  justify-content: center;
+  gap: 20px; /* Space between buttons */
+}
+
+/* Arrow buttons for Next and Previous */
+.controls button {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  font-size: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.controls button:before {
+  content: '';
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-style: solid;
+}
+
+/* Left arrow */
+button[aria-label="Previous"]:before {
+  border-width: 10px 15px 10px 0;
+  border-color: transparent #fff transparent transparent;
+}
+
+/* Right arrow */
+button[aria-label="Next"]:before {
+  border-width: 10px 0 10px 15px;
+  border-color: transparent transparent transparent #fff;
+}
