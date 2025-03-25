@@ -1,34 +1,61 @@
-import logo from './logo.svg';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+//import Papa from 'papaparse';
 import './App.css';
-import Papa from 'papaparse';
 
 function App() {
-  const [message, setMessage] = useState('');
-  const [showMessage, setShowMessage] = useState(false);
-
+  const [folderHandle, setFolderHandle] = useState(null);
   const [images, setImages] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [opacity, setOpacity] = useState(0.4);
-  const [csvData, setCsvData] = useState([]);
-  const [imageURL, setImageURL] = useState(null);
-  const [annotationURL, setAnnotationURL] = useState(null);
-  const [folderHandle, setFolderHandle] = useState(null);
+  const [imageURLs, setImageURLs] = useState({
+    satellite: null,
+    mask: null,
+    overlay: null,
+  });
+  const [opacity, setOpacity] = useState(0.75);
+  //const [csvData, setCsvData] = useState([]);
 
+  const [selectedRegion, setSelectedRegion] = useState({
+    startX: 0,
+    startY: 0,
+    endX: 0,
+    endY: 0,
+  });
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [status, setStatus] = useState('Ready');
+  const [searchResults, setSearchResults] = useState([]); // Add searchResults to state
+  const [drawnRegion, setDrawnRegion] = useState({
+    startX: 0,
+    startY: 0,
+    endX: 0,
+    endY: 0,
+  });
 
-  useEffect(() => {
-    if (showMessage) {
-      const timer = setTimeout(() => {
-        setShowMessage(false);
-      }, 1000); // Hide message after 2 seconds
-
-      return () => clearTimeout(timer);
+  const satelliteCanvasRef = useRef(null);
+  const maskCanvasRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
+  const regionCanvasRefSat = useRef(null); // Separate canvas for region drawing
+  const regionCanvasRefOverlay = useRef(null); 
+  const regionCanvasRefMask = useRef(null); 
+  
+  const loadFiles = useCallback(async (filePair) => {
+    if (!filePair) return;
+  
+    try {
+      const satelliteFile = await filePair.image.getFile();
+      const annotationFile = await filePair.annotation.getFile();
+  
+      setImageURLs({
+        satellite: URL.createObjectURL(satelliteFile),
+        mask: URL.createObjectURL(annotationFile),
+        overlay: URL.createObjectURL(satelliteFile), // initially overlay is satellite
+      });
+    } catch (error) {
+      console.error("Error loading files:", error);
     }
-  }, [showMessage]);
+  }, []);
 
 
-  // Function to allow user to pick a folder and scan it
-  const handleFolderSelect = async () => {
+  const handleFolderSelect = useCallback(async () => {
     try {
       const handle = await window.showDirectoryPicker();
       setFolderHandle(handle);
@@ -36,89 +63,234 @@ function App() {
       const imageFiles = [];
       const annotationsFolder = await handle.getDirectoryHandle('annotations', { create: false });
       const imagesFolder = await handle.getDirectoryHandle('images', { create: false });
-  
-      // Check if the annotation_quality.csv file exists
+      
+      /*
       let csvFileHandle;
       try {
         csvFileHandle = await handle.getFileHandle('annotation_quality.csv', { create: false });
         const file = await csvFileHandle.getFile();
         const fileText = await file.text();
-        const parsedCsvData = Papa.parse(fileText, { header: true }).data; // Parse the CSV file
-  
-        setCsvData(parsedCsvData); // Load the parsed data into state
-        console.log("Loaded existing CSV data:", parsedCsvData);
+        const parsedCsvData = Papa.parse(fileText, { header: true }).data;
+        setCsvData(parsedCsvData);
       } catch (error) {
         console.warn("annotation_quality.csv file not found. A new one will be created.");
-        // If the file does not exist, we don't need to do anything here
       }
-  
-      // Iterate through the 'images' folder and get corresponding annotation files
-      for await (const entry of imagesFolder.values()) {
+      */
+      for await (const entry of annotationsFolder.values()) {
         if (entry.kind === 'file' && entry.name.endsWith('.png')) {
           try {
-            const annotationHandle = await annotationsFolder.getFileHandle(entry.name, { create: false });
-            imageFiles.push({ image: entry, annotation: annotationHandle });
+            const imageHandle = await imagesFolder.getFileHandle(entry.name, { create: false });
+            imageFiles.push({ annotation: entry, image: imageHandle });
           } catch (error) {
-            console.warn(`Annotation for ${entry.name} not found. Skipping this image.`);
+            console.warn(`Image for Annotation ${entry.name} not found. Skipping this image.`);
           }
         }
       }
   
       setImages(imageFiles);
-      await loadFiles(imageFiles[0]); // Load the first image
+      if (imageFiles.length > 0) {
+        await loadFiles(imageFiles[0]); // Load the first image set
+      }
     } catch (err) {
       console.error("Error selecting folder: ", err);
     }
-  };
+  }, [loadFiles]); // Add loadFiles as a dependency
 
-  const loadFiles = async (filePair) => {
-    if (!filePair) return;
-
-    // Revoke previous object URLs to free up memory
-    if (imageURL) URL.revokeObjectURL(imageURL);
-    if (annotationURL) URL.revokeObjectURL(annotationURL);
-
-    // Load the image
-    const imageFile = await filePair.image.getFile();
-    const newImageURL = URL.createObjectURL(imageFile);
-    setImageURL(newImageURL);
-
-    // Load the corresponding annotation file
-    const annotationFile = await filePair.annotation.getFile();
-    const newAnnotationURL = URL.createObjectURL(annotationFile);
-    setAnnotationURL(newAnnotationURL);
-  };
-
-  const saveResult = async (status) => {
-    const currentImage = images[currentIndex].image.name;
-    const existingEntryIndex = csvData.findIndex(entry => entry.Image === currentImage);
+  const drawRegionCanvas = useCallback(() => {
+    const canvases = [
+      regionCanvasRefSat.current,
+      regionCanvasRefOverlay.current,
+      regionCanvasRefMask.current,
+    ];
+    const { startX, startY, endX, endY } = selectedRegion;
   
-    let updatedData;
+    canvases.forEach((canvas) => {
+      if (!canvas) return;
   
-    if (existingEntryIndex === -1) {
-      // Create new entry if it doesn't exist
-      const newEntry = { Image: currentImage, Status: status };
-      updatedData = [...csvData, newEntry];
-    } else {
-      // Modify existing entry
-      updatedData = csvData.map((entry, index) => 
-        index === existingEntryIndex ? { ...entry, Status: status } : entry
-      );
-    }
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+      if (isDrawing) {
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(startX, startY, endX - startX, endY - startY);
+      } else if (drawnRegion) {
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+          drawnRegion.startX,
+          drawnRegion.startY,
+          drawnRegion.endX - drawnRegion.startX,
+          drawnRegion.endY - drawnRegion.startY
+        );
+      }
+    });
+  }, [selectedRegion, isDrawing, drawnRegion]);
+  
+  const handleMouseDown = useCallback((e) => {
+    setDrawnRegion(null);
+    let canvas = satelliteCanvasRef.current;
+  
+    if (e.target.id==="overlay_canvas")
+      canvas = overlayCanvasRef.current;
+    else if (e.target.id==="mask_canvas")
+      canvas = maskCanvasRef.current;
 
-    setCsvData(updatedData);
-    const csvContent = Papa.unparse(updatedData);
-    try {
-      const fileHandle = await folderHandle.getFileHandle('annotation_quality.csv', { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(csvContent);
-      await writable.close();
-    } catch (err) {
-      console.error("Error writing CSV file: ", err);
-    }
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    setSelectedRegion({
+      startX: e.clientX - rect.left,
+      startY: e.clientY - rect.top,
+      endX: e.clientX - rect.left,
+      endY: e.clientY - rect.top,
+    });
+    setIsDrawing(true);
+  }, []);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!isDrawing) return;
+
+    let canvas = satelliteCanvasRef.current;
+    if (e.target.id==="overlay_canvas")
+      canvas = overlayCanvasRef.current;
+    else if (e.target.id==="mask_canvas")
+      canvas = maskCanvasRef.current;    
     
-  };
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    setSelectedRegion((prev) => ({
+      ...prev,
+      endX: e.clientX - rect.left,
+      endY: e.clientY - rect.top,
+    }));
+  }, [isDrawing]);
 
+  const handleMouseUp = useCallback(() => {
+    setIsDrawing(false);
+    setDrawnRegion(selectedRegion);
+  }, [selectedRegion]);
+  
+
+  const handleQuery = useCallback(async (queryType) => {
+    if (drawnRegion.startX === drawnRegion.endX && drawnRegion.startY === drawnRegion.endY) {
+      setStatus('Please draw a region first.');
+      return;
+    }
+
+    setStatus('Processing...');
+    try {
+      const canvas = queryType === 'satellite' ? satelliteCanvasRef.current : maskCanvasRef.current;
+      if (!canvas) return;
+
+      const { startX, startY, endX, endY } = drawnRegion;
+      const width = Math.abs(endX - startX);
+      const height = Math.abs(endY - startY);
+      const x = Math.min(startX, endX);
+      const y = Math.min(startY, endY);
+      const regionCanvas = document.createElement('canvas');
+      regionCanvas.width = width;
+      regionCanvas.height = height;
+      const ctx = regionCanvas.getContext('2d');
+      ctx.drawImage(canvas, x, y, width, height, 0, 0, width, height);
+
+      const regionDataUrl = regionCanvas.toDataURL('image/jpeg');
+      const base64Response = await fetch(regionDataUrl);
+      const blob = await base64Response.blob();
+      const formData = new FormData();
+      formData.append('region_image', blob, 'region.jpg');
+
+      const response = await fetch('http://localhost:5000/api/process-region', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server responded with status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      //display result data
+      setSearchResults(data.results); 
+      setStatus(`Found ${data.results.length} results.`);
+    } catch (error) {
+      setStatus(`Error: ${error.message}`);
+    }
+  }, [drawnRegion]);
+
+  useEffect(() => {
+    if (imageURLs.satellite && imageURLs.mask) {
+      const loadImageAndSync = () => {
+        const canvases = [
+          satelliteCanvasRef.current,
+          maskCanvasRef.current,
+          overlayCanvasRef.current,
+        ];
+        const imageUrls = [
+          imageURLs.satellite,
+          imageURLs.mask,
+          imageURLs.overlay,
+        ];
+
+        let imagesLoaded = 0;
+        const totalImages = canvases.length;
+
+        const syncRegionCanvas = (regionRef, imageRef) => {
+          if (regionRef.current && imageRef.current) {
+            regionRef.current.width = imageRef.current.width;
+            regionRef.current.height = imageRef.current.height;
+            regionRef.current.style.position = 'absolute';
+            regionRef.current.style.top = imageRef.current.offsetTop + 'px';
+            regionRef.current.style.left = imageRef.current.offsetLeft + 'px';
+            regionRef.current.style.pointerEvents = 'none';
+          }
+        };
+
+        const imageLoaded = () => {
+          imagesLoaded++;
+          if (imagesLoaded === totalImages) {
+            syncRegionCanvas(regionCanvasRefSat, satelliteCanvasRef);
+            syncRegionCanvas(regionCanvasRefMask, maskCanvasRef);
+            syncRegionCanvas(regionCanvasRefOverlay, overlayCanvasRef);
+          }
+        };
+
+        canvases.forEach((canvas, index) => {
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          const img = new Image();
+
+          img.onload = () => {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            canvas.style.width = `${img.width}px`;
+            canvas.style.height = `${img.height}px`;
+            ctx.drawImage(img, 0, 0, img.width, img.height);
+            if (index === 2) {
+              const maskImg = new Image();
+              maskImg.onload = () => {
+                ctx.globalAlpha = opacity;
+                ctx.drawImage(maskImg, 0, 0, img.width, img.height);
+                ctx.globalAlpha = 1;
+              };
+              maskImg.src = imageURLs.mask;
+            }
+            imageLoaded();
+          };
+          img.src = imageUrls[index];
+        });
+      };
+      loadImageAndSync();
+    }
+  }, [imageURLs, opacity]);
+
+  useEffect(() => {
+    drawRegionCanvas();
+  }, [drawRegionCanvas]);
+
+  // Navigation handlers
   const handleNext = async () => {
     if (currentIndex < images.length - 1) {
       const newIndex = currentIndex + 1;
@@ -135,22 +307,9 @@ function App() {
     }
   };
 
-  const handleMatch = () => {
-    saveResult('good');
-    setMessage('Updated: Match');
-    setShowMessage(true);
-
-  };
-
-  const handleMismatch = () => {
-    saveResult('bad');
-    setMessage('Updated: Mismatch');
-    setShowMessage(true);
-  };
-
   return (
     <div className="App">
-      <h1>Annotation Quality Labeller</h1>
+      <h1>Multi-Image Annotation and Similarity Search</h1>
 
       <div>
         <button onClick={handleFolderSelect}>Select Folder</button>
@@ -159,39 +318,95 @@ function App() {
       {folderHandle && (
         <>
           <div className="image-container">
-            {imageURL && <img src={imageURL} alt="current" style={{ opacity: 1 }} />}
-            {annotationURL && <img src={annotationURL} alt="mask" className="annotation-mask" style={{ opacity: opacity }} />}
-          </div>
-          
-   
-          <div>
-            <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={opacity}
-              onChange={(e) => setOpacity(e.target.value)}
-            />
+            <div>
+              <h3>Satellite Image</h3>
+              <canvas
+                id = "satellite_canvas"
+                className="image-canvas"
+                ref={satelliteCanvasRef}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseOut={handleMouseUp}
+              />
+              <canvas
+                ref={regionCanvasRefSat} // Overlay canvas for region drawing
+              />
+            </div>
+
+            <div>
+              <h3>Overlay Image</h3>
+              <canvas
+                id = "overlay_canvas"
+                className="image-canvas"
+                ref={overlayCanvasRef}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseOut={handleMouseUp}
+              />
+              <canvas
+                ref={regionCanvasRefOverlay} // Overlay canvas for region drawing
+              />
+              <div>
+                <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1"
+                  step="0.01"
+                  value={opacity}
+                  onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                />
+              </div>
+            </div>
+
+            <div>
+              <h3>Mask Image</h3>
+              <canvas
+                id = "mask_canvas"
+                className="image-canvas"
+                ref={maskCanvasRef}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseOut={handleMouseUp}
+              />
+              <canvas
+                ref={regionCanvasRefMask} // Overlay canvas for region drawing
+              />
+            </div>
           </div>
 
           <div className="controls">
-            <button onClick={handlePrevious} disabled={currentIndex === 0} aria-label="Previous">
-              &#9664; {/* Left arrow symbol */}
+            <button onClick={handlePrevious} disabled={currentIndex === 0}>
+              Previous
             </button>
-            <button onClick={handleNext} disabled={currentIndex === images.length - 1} aria-label="Next">
-              &#9654; {/* Right arrow symbol */}
+            <button onClick={handleNext} disabled={currentIndex === images.length - 1}>
+              Next
             </button>
           </div>
 
-          <div className="evaluation">
-            <button onClick={handleMatch}>Match</button>
-            <button onClick={handleMismatch}>Mismatch</button>
+          <div className="search-controls">
+            <button onClick={() => handleQuery('satellite')}>
+              Query by Satellite Region
+            </button>
+            <button onClick={() => handleQuery('mask')}>
+              Query by Mask Region
+            </button>
           </div>
 
-          {showMessage && (
-            <div className="message">{message}</div>
+          <div className="search-status">{status}</div>
+
+          {searchResults.length > 0 && (
+            <div className="search-results">
+              {searchResults.map((result, index) => (
+                <div key={index} className="result-item">
+                  <img src={result.image_data} alt={`Result ${index}`} />
+                  <p>Similarity: {result.similarity.toFixed(2)}</p>
+                </div>
+              ))}
+            </div>
           )}
         </>
       )}
