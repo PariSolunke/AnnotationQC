@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 //import Papa from 'papaparse';
+import ImagePreview from './components/ImagePreview';
 import './App.css';
+import SearchResults from './components/SearchResults';
 
 function App() {
   const [folderHandle, setFolderHandle] = useState(null);
@@ -22,7 +24,7 @@ function App() {
   });
   const [isDrawing, setIsDrawing] = useState(false);
   const [status, setStatus] = useState('Ready');
-  const [searchResults, setSearchResults] = useState([]); // Add searchResults to state
+  const [searchResults, setSearchResults] = useState([]); 
   const [drawnRegion, setDrawnRegion] = useState({
     startX: 0,
     startY: 0,
@@ -307,6 +309,13 @@ function App() {
     }
   };
 
+  const handlePreviewClick = async (index) => {
+    if (index >= 0 && index < images.length) {
+      setCurrentIndex(index);
+      await loadFiles(images[index]);
+    }
+  };
+
   return (
     <div className="App">
       <h1>Multi-Image Annotation and Similarity Search</h1>
@@ -317,65 +326,79 @@ function App() {
 
       {folderHandle && (
         <>
-          <div className="image-container">
-            <div>
-              <h3>Satellite Image</h3>
-              <canvas
-                id = "satellite_canvas"
-                className="image-canvas"
-                ref={satelliteCanvasRef}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseOut={handleMouseUp}
-              />
-              <canvas
-                ref={regionCanvasRefSat} // Overlay canvas for region drawing
-              />
-            </div>
+          <div className="top-container">
 
-            <div>
-              <h3>Overlay Image</h3>
-              <canvas
-                id = "overlay_canvas"
-                className="image-canvas"
-                ref={overlayCanvasRef}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseOut={handleMouseUp}
-              />
-              <canvas
-                ref={regionCanvasRefOverlay} // Overlay canvas for region drawing
-              />
+            <ImagePreview 
+              images={images}
+              currentIndex={currentIndex}
+              onPreviewClick={handlePreviewClick}
+            />
+            
+            <div className="image-container">
               <div>
-                <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1"
-                  step="0.01"
-                  value={opacity}
-                  onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                <h3>Satellite Image</h3>
+                <canvas
+                  id = "satellite_canvas"
+                  className="image-canvas"
+                  ref={satelliteCanvasRef}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseOut={handleMouseUp}
+                />
+                <canvas
+                  ref={regionCanvasRefSat} // Overlay canvas for region drawing
+                />
+              </div>
+
+              <div>
+                <h3>Overlay Image</h3>
+                <canvas
+                  id = "overlay_canvas"
+                  className="image-canvas"
+                  ref={overlayCanvasRef}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseOut={handleMouseUp}
+                />
+                <canvas
+                  ref={regionCanvasRefOverlay} // Overlay canvas for region drawing
+                />
+                <div>
+                  <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.01"
+                    value={opacity}
+                    onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <h3>Mask Image</h3>
+                <canvas
+                  id = "mask_canvas"
+                  className="image-canvas"
+                  ref={maskCanvasRef}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseOut={handleMouseUp}
+                />
+                <canvas
+                  ref={regionCanvasRefMask} // Overlay canvas for region drawing
                 />
               </div>
             </div>
 
             <div>
-              <h3>Mask Image</h3>
-              <canvas
-                id = "mask_canvas"
-                className="image-canvas"
-                ref={maskCanvasRef}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseOut={handleMouseUp}
-              />
-              <canvas
-                ref={regionCanvasRefMask} // Overlay canvas for region drawing
-              />
+
             </div>
+
           </div>
 
           <div className="controls">
@@ -396,18 +419,8 @@ function App() {
             </button>
           </div>
 
-          <div className="search-status">{status}</div>
+          <SearchResults results={searchResults} status={status} />
 
-          {searchResults.length > 0 && (
-            <div className="search-results">
-              {searchResults.map((result, index) => (
-                <div key={index} className="result-item">
-                  <img src={result.image_data} alt={`Result ${index}`} />
-                  <p>Similarity: {result.similarity.toFixed(2)}</p>
-                </div>
-              ))}
-            </div>
-          )}
         </>
       )}
     </div>

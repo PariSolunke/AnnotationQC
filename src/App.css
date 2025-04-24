@@ -1,14 +1,15 @@
 .App {
   text-align: center;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px;
 }
 
+.top-container{
+  display: grid;
+  grid-template-columns: 1fr 8fr 1fr;
+}
 
 .image-container {
   display: flex;
-  justify-content: center; /* Change this line */
+  justify-content: center; 
   gap: 20px;
   margin: 20px 0;
 }
@@ -48,8 +49,6 @@ button:disabled {
   margin: 20px 0;
 }
 
-
-
 .search-controls {
   display: flex;
   justify-content: center;
@@ -62,27 +61,6 @@ button:disabled {
   padding: 10px;
   background-color: #f0f0f0;
   border-radius: 5px;
-}
-
-.search-results {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 20px;
-  margin-top: 20px;
-}
-
-.result-item {
-  border: 1px solid #e0e0e0;
-  padding: 10px;
-  text-align: center;
-  border-radius: 5px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.result-item img {
-  max-width: 100%;
-  height: auto;
-  margin-bottom: 10px;
 }
 
 label {
@@ -108,7 +86,7 @@ input[type="range"] {
 .image-container > div {
   display: flex;
   flex-direction: column;
-  align-items: center; /* Center horizontally */
+  align-items: center;
 }
 
 .image-container canvas {
