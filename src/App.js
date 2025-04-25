@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ImagePreview from './components/ImagePreview';
 import './App.css';
 import SearchResults from './components/SearchResults';
+import DrawingControls from './components/DrawingControls';
 
 function App() {
   const [folderHandle, setFolderHandle] = useState(null);
@@ -201,7 +202,7 @@ function App() {
       const formData = new FormData();
       formData.append('region_image', blob, 'region.jpg');
 
-      const response = await fetch('http://localhost:5000/api/process-region', {
+      const response = await fetch('http://localhost:5001/api/process-region', {
         method: 'POST',
         body: formData,
       });
@@ -396,7 +397,12 @@ function App() {
             </div>
 
             <div>
-
+              <DrawingControls 
+                onToolChange={(tool) => console.log('Tool selected:', tool)}
+                onColorChange={(color, label) => console.log('Color selected:', color, label)}
+                onSave={() => console.log('Save mask')}
+                onClear={() => console.log('Clear mask')}
+              />
             </div>
 
           </div>

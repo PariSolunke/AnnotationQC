@@ -5,6 +5,8 @@
 .top-container{
   display: grid;
   grid-template-columns: 1fr 8fr 1fr;
+  align-items: center; 
+  justify-items: center;
 }
 
 .image-container {
