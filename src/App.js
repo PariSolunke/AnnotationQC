@@ -131,6 +131,7 @@ function App() {
   }, [selectedRegion, isDrawing, drawnRegion]);
   
   const handleMouseDown = useCallback((e) => {
+    e.preventDefault();
     setDrawnRegion(null);
     let canvas = satelliteCanvasRef.current;
   
@@ -152,7 +153,7 @@ function App() {
 
   const handleMouseMove = useCallback((e) => {
     if (!isDrawing) return;
-
+    e.preventDefault(); 
     let canvas = satelliteCanvasRef.current;
     if (e.target.id==="overlay_canvas")
       canvas = overlayCanvasRef.current;
@@ -168,7 +169,30 @@ function App() {
     }));
   }, [isDrawing]);
 
-  const handleMouseUp = useCallback(() => {
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsDrawing(false);
+    };
+    
+    // Prevent text selection while drawing
+    const handleSelectStart = (e) => {
+      if (isDrawing) {
+        e.preventDefault();
+        return false;
+      }
+    };
+    
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    document.addEventListener('selectstart', handleSelectStart);
+    
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+      document.removeEventListener('selectstart', handleSelectStart);
+    };
+  }, [isDrawing]);
+
+  const handleMouseUp = useCallback((e) => {
+    e.preventDefault();
     setIsDrawing(false);
     setDrawnRegion(selectedRegion);
   }, [selectedRegion]);
@@ -202,7 +226,7 @@ function App() {
       const formData = new FormData();
       formData.append('region_image', blob, 'region.jpg');
 
-      const response = await fetch('http://localhost:5001/api/process-region', {
+      const response = await fetch('http://localhost:5000/api/process-region', {
         method: 'POST',
         body: formData,
       });
@@ -224,6 +248,28 @@ function App() {
   }, [drawnRegion]);
 
   useEffect(() => {
+
+    const syncRegionCanvas = (regionCanvas, imageCanvas) => {
+      
+      if (regionCanvas && imageCanvas) {
+        // Set the region canvas to exactly match the displayed size of the image canvas
+        const rect = imageCanvas.getBoundingClientRect();
+        
+        // Set both internal and display dimensions to match
+        regionCanvas.width = imageCanvas.width;
+        regionCanvas.height = imageCanvas.height;
+        regionCanvas.style.width = imageCanvas.style.width;
+        regionCanvas.style.height = imageCanvas.style.height;
+        
+        // Ensure the region canvas is positioned exactly over the image canvas
+        regionCanvas.style.position = 'absolute';
+        regionCanvas.style.top = '0';
+        regionCanvas.style.left = '0';
+        regionCanvas.style.pointerEvents = 'none';
+      }
+      
+    };
+
     if (imageURLs.satellite && imageURLs.mask) {
       const loadImageAndSync = () => {
         const canvases = [
@@ -231,61 +277,95 @@ function App() {
           maskCanvasRef.current,
           overlayCanvasRef.current,
         ];
+        const regionCanvases = [
+          regionCanvasRefSat.current,
+          regionCanvasRefMask.current,
+          regionCanvasRefOverlay.current,
+        ];
         const imageUrls = [
           imageURLs.satellite,
           imageURLs.mask,
           imageURLs.overlay,
         ];
-
+  
         let imagesLoaded = 0;
         const totalImages = canvases.length;
+  
 
-        const syncRegionCanvas = (regionRef, imageRef) => {
-          if (regionRef.current && imageRef.current) {
-            regionRef.current.width = imageRef.current.width;
-            regionRef.current.height = imageRef.current.height;
-            regionRef.current.style.position = 'absolute';
-            regionRef.current.style.top = imageRef.current.offsetTop + 'px';
-            regionRef.current.style.left = imageRef.current.offsetLeft + 'px';
-            regionRef.current.style.pointerEvents = 'none';
-          }
-        };
-
+  
         const imageLoaded = () => {
           imagesLoaded++;
           if (imagesLoaded === totalImages) {
-            syncRegionCanvas(regionCanvasRefSat, satelliteCanvasRef);
-            syncRegionCanvas(regionCanvasRefMask, maskCanvasRef);
-            syncRegionCanvas(regionCanvasRefOverlay, overlayCanvasRef);
+            // Sync all region canvases after all images are loaded
+            for (let i = 0; i < canvases.length; i++) {
+              syncRegionCanvas(regionCanvases[i], canvases[i]);
+            }
           }
         };
-
+  
         canvases.forEach((canvas, index) => {
           if (!canvas) return;
           const ctx = canvas.getContext('2d');
           const img = new Image();
-
+  
           img.onload = () => {
-            canvas.width = img.width;
-            canvas.height = img.height;
-            canvas.style.width = `${img.width}px`;
-            canvas.style.height = `${img.height}px`;
-            ctx.drawImage(img, 0, 0, img.width, img.height);
-            if (index === 2) {
+            const maxCanvasWidth = canvas.parentElement.clientWidth;
+            const aspectRatio = img.width / img.height;
+          
+            // Set canvas style dimensions
+            canvas.style.width = '100%';
+            canvas.style.height = 'auto';
+          
+            // Set internal canvas dimensions to fit image while preserving aspect ratio
+            canvas.width = maxCanvasWidth;
+            canvas.height = maxCanvasWidth / aspectRatio;
+          
+            // Clear previous content
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+          
+            // Draw scaled image
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          
+            if (index === 2) { // For overlay canvas
               const maskImg = new Image();
               maskImg.onload = () => {
                 ctx.globalAlpha = opacity;
-                ctx.drawImage(maskImg, 0, 0, img.width, img.height);
+                ctx.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
                 ctx.globalAlpha = 1;
               };
               maskImg.src = imageURLs.mask;
             }
+          
             imageLoaded();
           };
+          
+          
           img.src = imageUrls[index];
         });
       };
+      
       loadImageAndSync();
+      
+      // Add window resize listener to handle responsive behavior
+      const handleResize = () => {
+        if (
+          satelliteCanvasRef.current && 
+          maskCanvasRef.current && 
+          overlayCanvasRef.current && 
+          regionCanvasRefSat.current && 
+          regionCanvasRefMask.current && 
+          regionCanvasRefOverlay.current
+        ) {
+          syncRegionCanvas(regionCanvasRefSat.current, satelliteCanvasRef.current);
+          syncRegionCanvas(regionCanvasRefMask.current, maskCanvasRef.current);
+          syncRegionCanvas(regionCanvasRefOverlay.current, overlayCanvasRef.current);
+        }
+      };
+      
+      window.addEventListener('resize', handleResize);
+      return () => {
+        window.removeEventListener('resize', handleResize);
+      };
     }
   }, [imageURLs, opacity]);
 
@@ -338,34 +418,40 @@ function App() {
             <div className="image-container">
               <div>
                 <h3>Satellite Image</h3>
-                <canvas
-                  id = "satellite_canvas"
-                  className="image-canvas"
-                  ref={satelliteCanvasRef}
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseOut={handleMouseUp}
-                />
-                <canvas
-                  ref={regionCanvasRefSat} // Overlay canvas for region drawing
-                />
+                <div style={{ position: 'relative' }}>
+                  <canvas
+                    id="satellite_canvas"
+                    className="image-canvas"
+                    ref={satelliteCanvasRef}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseOut={handleMouseUp}
+                  />
+                  <canvas
+                    className='drawing-canvas'
+                    ref={regionCanvasRefSat}
+                  />
+                </div>
               </div>
 
               <div>
                 <h3>Overlay Image</h3>
-                <canvas
-                  id = "overlay_canvas"
-                  className="image-canvas"
-                  ref={overlayCanvasRef}
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseOut={handleMouseUp}
-                />
-                <canvas
-                  ref={regionCanvasRefOverlay} // Overlay canvas for region drawing
-                />
+                <div style={{ position: 'relative' }}>
+                  <canvas
+                    id="overlay_canvas"
+                    className="image-canvas"
+                    ref={overlayCanvasRef}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseOut={handleMouseUp}
+                  />
+                  <canvas
+                    className='drawing-canvas'
+                    ref={regionCanvasRefOverlay}
+                  />
+                </div>
                 <div>
                   <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
                   <input
@@ -381,18 +467,21 @@ function App() {
 
               <div>
                 <h3>Mask Image</h3>
-                <canvas
-                  id = "mask_canvas"
-                  className="image-canvas"
-                  ref={maskCanvasRef}
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseOut={handleMouseUp}
-                />
-                <canvas
-                  ref={regionCanvasRefMask} // Overlay canvas for region drawing
-                />
+                <div style={{ position: 'relative' }}>
+                  <canvas
+                    id="mask_canvas"
+                    className="image-canvas"
+                    ref={maskCanvasRef}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseOut={handleMouseUp}
+                  />
+                  <canvas
+                    className='drawing-canvas'
+                    ref={regionCanvasRefMask}
+                  />
+                </div>
               </div>
             </div>
 
@@ -405,9 +494,9 @@ function App() {
               />
             </div>
 
-          </div>
-
-          <div className="controls">
+            <div></div>
+            <div>
+            <div className="controls">
             <button onClick={handlePrevious} disabled={currentIndex === 0}>
               Previous
             </button>
@@ -424,6 +513,13 @@ function App() {
               Query by Mask Region
             </button>
           </div>
+
+           <></>
+
+            </div>
+          </div>
+
+
 
           <SearchResults results={searchResults} status={status} />
 
