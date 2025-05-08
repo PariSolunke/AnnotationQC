@@ -14,7 +14,7 @@ function App() {
     mask: null,
     overlay: null,
   });
-  const [opacity, setOpacity] = useState(0.75);
+  const [opacity, setOpacity] = useState(0.65);
   //const [csvData, setCsvData] = useState([]);
 
   const [selectedRegion, setSelectedRegion] = useState({
@@ -23,7 +23,16 @@ function App() {
     endX: 0,
     endY: 0,
   });
+
+  const [isSelecting, setIsSelecting] = useState(false);
+
+  const [interactionMode, setInteractionMode] = useState('select');
+  
   const [isDrawing, setIsDrawing] = useState(false);
+  const [drawingTool, setDrawingTool] = useState(null);
+  const [drawingColor, setDrawingColor] = useState('blue');
+  const [drawingStartPos, setDrawingStartPos] = useState({ x: 0, y: 0 });
+
   const [status, setStatus] = useState('Ready');
   const [searchResults, setSearchResults] = useState([]); 
   const [drawnRegion, setDrawnRegion] = useState({
@@ -67,18 +76,6 @@ function App() {
       const annotationsFolder = await handle.getDirectoryHandle('annotations', { create: false });
       const imagesFolder = await handle.getDirectoryHandle('images', { create: false });
       
-      /*
-      let csvFileHandle;
-      try {
-        csvFileHandle = await handle.getFileHandle('annotation_quality.csv', { create: false });
-        const file = await csvFileHandle.getFile();
-        const fileText = await file.text();
-        const parsedCsvData = Papa.parse(fileText, { header: true }).data;
-        setCsvData(parsedCsvData);
-      } catch (error) {
-        console.warn("annotation_quality.csv file not found. A new one will be created.");
-      }
-      */
       for await (const entry of annotationsFolder.values()) {
         if (entry.kind === 'file' && entry.name.endsWith('.png')) {
           try {
@@ -89,7 +86,7 @@ function App() {
           }
         }
       }
-  
+
       setImages(imageFiles);
       if (imageFiles.length > 0) {
         await loadFiles(imageFiles[0]); // Load the first image set
@@ -100,20 +97,20 @@ function App() {
   }, [loadFiles]); // Add loadFiles as a dependency
 
   const drawRegionCanvas = useCallback(() => {
-    const canvases = [
+    const regionCanvases = [
       regionCanvasRefSat.current,
       regionCanvasRefOverlay.current,
       regionCanvasRefMask.current,
     ];
     const { startX, startY, endX, endY } = selectedRegion;
   
-    canvases.forEach((canvas) => {
+    regionCanvases.forEach((canvas) => {
       if (!canvas) return;
   
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-      if (isDrawing) {
+      if (isSelecting) {
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 2;
         ctx.strokeRect(startX, startY, endX - startX, endY - startY);
@@ -128,75 +125,151 @@ function App() {
         );
       }
     });
-  }, [selectedRegion, isDrawing, drawnRegion]);
+  }, [selectedRegion, isSelecting, drawnRegion]);
   
-  const handleMouseDown = useCallback((e) => {
+  const handleMouseDown = (e) => {
     e.preventDefault();
-    setDrawnRegion(null);
-    let canvas = satelliteCanvasRef.current;
-  
-    if (e.target.id==="overlay_canvas")
-      canvas = overlayCanvasRef.current;
-    else if (e.target.id==="mask_canvas")
-      canvas = maskCanvasRef.current;
+    if(interactionMode === 'draw'){
 
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    setSelectedRegion({
-      startX: e.clientX - rect.left,
-      startY: e.clientY - rect.top,
-      endX: e.clientX - rect.left,
-      endY: e.clientY - rect.top,
-    });
-    setIsDrawing(true);
-  }, []);
+      if (!drawingTool) return;
+  
+      const canvas = maskCanvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      setDrawingStartPos({ x, y });
+      
+      if (drawingTool === 'brush' || drawingTool === 'eraser') {
+        const ctx = canvas.getContext('2d');
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = drawingTool === 'eraser' ? 'black' : drawingColor;
+        ctx.fill();
+      }
+      setIsDrawing(true);
+    }
+
+    else{
+      let canvas = satelliteCanvasRef.current;
+    
+      if (e.target.id==="overlay_canvas")
+        canvas = overlayCanvasRef.current;
+      else if (e.target.id==="mask_canvas")
+        canvas = maskCanvasRef.current;
+
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      setSelectedRegion({
+        startX: e.clientX - rect.left,
+        startY: e.clientY - rect.top,
+        endX: e.clientX - rect.left,
+        endY: e.clientY - rect.top,
+      });
+    setIsSelecting(true);
+    }
+  }
 
   const handleMouseMove = useCallback((e) => {
-    if (!isDrawing) return;
     e.preventDefault(); 
-    let canvas = satelliteCanvasRef.current;
-    if (e.target.id==="overlay_canvas")
-      canvas = overlayCanvasRef.current;
-    else if (e.target.id==="mask_canvas")
-      canvas = maskCanvasRef.current;    
+
+    if(interactionMode === 'draw'){
+      if ( !isDrawing || !drawingTool || e.target.id!="mask_canvas") return;
+
+      const canvas = maskCanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      if (drawingTool === 'rectangle') {
+        const tempCtx = regionCanvasRefMask.current.getContext('2d');
+        tempCtx.clearRect(0, 0, canvas.width, canvas.height);
+        tempCtx.strokeStyle = drawingColor;
+        tempCtx.lineWidth = 2;
+        tempCtx.strokeRect(drawingStartPos.x, drawingStartPos.y, x - drawingStartPos.x, y - drawingStartPos.y);
+      } else if (drawingTool === 'brush' || drawingTool === 'eraser') {
+        ctx.beginPath();
+        ctx.moveTo(drawingStartPos.x, drawingStartPos.y);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = drawingTool === 'eraser' ? 'black' : drawingColor;
+        ctx.lineWidth = 10;
+        ctx.stroke();
+        setDrawingStartPos({ x, y });
+      }
+      return;
+    } 
+
+    else if(isSelecting){
+      let canvas = satelliteCanvasRef.current;
+      if (e.target.id==="overlay_canvas")
+        canvas = overlayCanvasRef.current;
+      else if (e.target.id==="mask_canvas")
+        canvas = maskCanvasRef.current;    
+      
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      setSelectedRegion((prev) => ({
+        ...prev,
+        endX: e.clientX - rect.left,
+        endY: e.clientY - rect.top,
+      }));
+    }
     
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    setSelectedRegion((prev) => ({
-      ...prev,
-      endX: e.clientX - rect.left,
-      endY: e.clientY - rect.top,
-    }));
-  }, [isDrawing]);
+  }, [isSelecting, isDrawing, interactionMode]);
+
 
   useEffect(() => {
     const handleGlobalMouseUp = () => {
+      setIsSelecting(false);
       setIsDrawing(false);
     };
     
     // Prevent text selection while drawing
-    const handleSelectStart = (e) => {
-      if (isDrawing) {
+    const handleSelectDrawStart = (e) => {
+      if (isSelecting || isDrawing) {
         e.preventDefault();
         return false;
       }
     };
     
     window.addEventListener('mouseup', handleGlobalMouseUp);
-    document.addEventListener('selectstart', handleSelectStart);
+    document.addEventListener('selectstart', handleSelectDrawStart);
     
     return () => {
       window.removeEventListener('mouseup', handleGlobalMouseUp);
-      document.removeEventListener('selectstart', handleSelectStart);
+      document.removeEventListener('selectstart', handleSelectDrawStart);
     };
-  }, [isDrawing]);
+  }, [isSelecting, isDrawing]);
 
-  const handleMouseUp = useCallback((e) => {
-    e.preventDefault();
-    setIsDrawing(false);
-    setDrawnRegion(selectedRegion);
-  }, [selectedRegion]);
+  function handleMouseUp(e) {
+    if(interactionMode === 'draw') {
+      e.preventDefault();
   
+      if (!isDrawing || !drawingTool) return;
+    
+      const canvas = maskCanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      if (drawingTool === 'rectangle') {
+        ctx.fillStyle = drawingColor;
+        ctx.fillRect(drawingStartPos.x, drawingStartPos.y, x - drawingStartPos.x, y - drawingStartPos.y);
+        
+        // Clear the temporary canvas
+        const tempCtx = regionCanvasRefMask.current.getContext('2d');
+        tempCtx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      
+      setIsDrawing(false);
+    }
+    else {
+      e.preventDefault();
+      setIsSelecting(false);
+      setDrawnRegion(selectedRegion);
+    }
+  }
 
   const handleQuery = useCallback(async (queryType) => {
     if (drawnRegion.startX === drawnRegion.endX && drawnRegion.startY === drawnRegion.endY) {
@@ -226,7 +299,7 @@ function App() {
       const formData = new FormData();
       formData.append('region_image', blob, 'region.jpg');
 
-      const response = await fetch('http://localhost:5000/api/process-region', {
+      const response = await fetch('http://192.168.1.170:5000/api/process-region', {
         method: 'POST',
         body: formData,
       });
@@ -378,6 +451,9 @@ function App() {
     if (currentIndex < images.length - 1) {
       const newIndex = currentIndex + 1;
       setCurrentIndex(newIndex);
+      setSearchResults([]);
+      setStatus('Ready');
+
       await loadFiles(images[newIndex]);
     }
   };
@@ -386,6 +462,9 @@ function App() {
     if (currentIndex > 0) {
       const newIndex = currentIndex - 1;
       setCurrentIndex(newIndex);
+      setSearchResults([]);
+      setStatus('Ready');
+
       await loadFiles(images[newIndex]);
     }
   };
@@ -393,9 +472,106 @@ function App() {
   const handlePreviewClick = async (index) => {
     if (index >= 0 && index < images.length) {
       setCurrentIndex(index);
+      setSearchResults([]);
+      setStatus('Ready'); 
       await loadFiles(images[index]);
     }
   };
+
+const handleResultClick = async (index) => {
+    if (index >= 0 && index < images.length) {
+      setCurrentIndex(index);
+      setSearchResults([]);
+      setStatus('Ready'); 
+      await loadFiles(images[index]);
+    }
+  };
+
+  const onSave = async () => {
+    // Check if we have the necessary references
+    if (!maskCanvasRef.current || !folderHandle || !images || !currentIndex) {
+      console.error("Missing required references for saving");
+      return;
+    }
+  
+    try {
+      // Get the current image file pair
+      const currentFilePair = images[currentIndex];
+      
+      // Get a reference to the annotations directory
+      const annotationsFolder = await folderHandle.getDirectoryHandle('annotations', { create: false });
+      
+      // Get the file handle for the current annotation file
+      const fileHandle = await annotationsFolder.getFileHandle(currentFilePair.annotation.name, { create: false });
+      
+      // Convert canvas to blob
+      const canvas = maskCanvasRef.current;
+      const blob = await new Promise(resolve => {
+        canvas.toBlob(resolve, 'image/png');
+      });
+      
+      // Create a writable stream and write the blob data
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      
+      console.log("Mask saved successfully!");
+      
+      // Show a success message to the user
+      alert("Mask saved successfully!");
+    } catch (error) {
+      console.error("Error saving the mask:", error);
+      alert("Failed to save the mask. See console for details.");
+    }
+  };
+
+  const onClear = async () => {
+    // Check if we have the necessary references
+    if (!maskCanvasRef.current || !images || currentIndex === undefined) {
+      console.error("Missing required references for clearing");
+      return;
+    }
+  
+    try {
+      // Get the current image file pair
+      const currentFilePair = images[currentIndex];
+      
+      // Get the annotation file again
+      const annotationFile = await currentFilePair.annotation.getFile();
+      
+      // Create a new image object from the original annotation file
+      const img = new Image();
+      img.src = URL.createObjectURL(annotationFile);
+      
+      // When the image loads, draw it on the canvas
+      img.onload = () => {
+        const canvas = maskCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        // Clear the canvas first
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw the original annotation image
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
+        // Clean up the object URL
+        URL.revokeObjectURL(img.src);
+        
+        console.log("Canvas cleared and reset to original annotation");
+      };
+      
+      // If you have any temporary drawing canvas, clear that too
+      if (regionCanvasRefMask && regionCanvasRefMask.current) {
+        const tempCtx = regionCanvasRefMask.current.getContext('2d');
+        tempCtx.clearRect(0, 0, regionCanvasRefMask.current.width, regionCanvasRefMask.current.height);
+      }
+      
+    } catch (error) {
+      console.error("Error clearing the canvas:", error);
+      alert("Failed to reset the canvas. See console for details.");
+    }
+  };
+    
 
   return (
     <div className="App">
@@ -487,10 +663,41 @@ function App() {
 
             <div>
               <DrawingControls 
-                onToolChange={(tool) => console.log('Tool selected:', tool)}
-                onColorChange={(color, label) => console.log('Color selected:', color, label)}
-                onSave={() => console.log('Save mask')}
-                onClear={() => console.log('Clear mask')}
+                onToolChange={(tool) => {
+                  if (tool == null){
+                    setInteractionMode('select');
+
+                    satelliteCanvasRef.current.style.opacity = 1;
+                    overlayCanvasRef.current.style.opacity = 1;
+                    setDrawingTool(tool);
+                  }
+                  else{
+
+
+                    console.log('Drawing tool selected:', tool);
+                    setDrawingTool(tool);
+                    console.log("setting interaction mode")
+                    setInteractionMode('draw');
+                    satelliteCanvasRef.current.style.opacity = 0.2;
+                    overlayCanvasRef.current.style.opacity = 0.2;
+                    const regionCanvases = [
+                      regionCanvasRefSat.current,
+                      regionCanvasRefOverlay.current,
+                      regionCanvasRefMask.current,
+                    ];  
+                    regionCanvases.forEach((canvas) => {
+                      if (!canvas) return;
+                      const ctx = canvas.getContext('2d');
+                      ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    })
+                  }
+                }}
+                onColorChange={(color, label) => {
+                  console.log('Color selected:', color, label)
+                  setDrawingColor(color);
+                }}
+                onSave={onSave}
+                onClear={onClear}
               />
             </div>
 
@@ -521,7 +728,7 @@ function App() {
 
 
 
-          <SearchResults results={searchResults} status={status} />
+          <SearchResults results={searchResults} status={status} images={images} opacity={opacity} handleResultClick={handleResultClick}/>
 
         </>
       )}

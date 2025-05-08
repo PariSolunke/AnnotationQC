@@ -7,6 +7,11 @@ const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
   const [activeColor, setActiveColor] = useState('blue');
 
   const handleToolSelect = (tool) => {
+    if (activeTool === tool) {
+      setActiveTool(null);
+      onToolChange(null);
+      return;
+    }
     setActiveTool(tool);
     onToolChange(tool);
   };
