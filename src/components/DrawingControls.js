@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Square, Circle, Save, Trash, Eraser } from 'lucide-react';
+import { Square, Circle, Save, Trash, Hexagon } from 'lucide-react';
 import '../styles/drawingcontrols.css';
 
-const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
+const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear }) => {
   const [activeTool, setActiveTool] = useState(null);
   const [activeColor, setActiveColor] = useState('blue');
 
@@ -35,7 +35,7 @@ const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
       {/* Drawing Tools */}
       <div className="tool-buttons">
         <button 
-          className={`tool-button ${activeTool === 'rectangle' ? 'active' : ''}`}
+          className={`tool-button ${activeTool === 'rectangle'  ? 'active' : ''}`}
           onClick={() => handleToolSelect('rectangle')}
           title="Rectangle Tool"
         >
@@ -49,11 +49,11 @@ const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
           <Circle size={20} />
         </button>
         <button 
-          className={`tool-button ${activeTool === 'eraser' ? 'active' : ''}`}
-          onClick={() => handleToolSelect('eraser')}
-          title="Eraser Tool"
+          className={`tool-button ${activeTool === 'polygon' ? 'active' : ''}`}
+          onClick={() => handleToolSelect('polygon')}
+          title="Polygon Tool"
         >
-          <Eraser size={20} />
+          <Hexagon size={20} />
         </button>
       </div>
       
@@ -63,8 +63,9 @@ const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
         <div className="color-options">
           {colorOptions.map((option) => (
             <button
+              disabled={interactionMode !== 'draw'}
               key={option.label}
-              className={`color-option ${activeColor === option.color ? 'active' : ''}`}
+              className={`color-option ${activeColor === option.color && interactionMode==='draw'  ? 'active' : ''}`}
               onClick={() => handleColorSelect(option.color, option.label)}
             >
               <div className="color-swatch" style={{ backgroundColor: option.color }}></div>
@@ -76,7 +77,8 @@ const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
       
       {/* Action Buttons */}
       <div className="action-buttons">
-        <button 
+        <button
+          disabled={interactionMode !== 'draw'}
           className="save-button"
           onClick={onSave}
         >
@@ -84,6 +86,7 @@ const DrawingControls = ({ onToolChange, onColorChange, onSave, onClear }) => {
           <span>Save Mask</span>
         </button>
         <button 
+          disabled={interactionMode !== 'draw'}
           className="clear-button"
           onClick={onClear}
         >

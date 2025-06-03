@@ -3,68 +3,66 @@ import "../styles/searchresults.css"
 
 function SearchResults({ results, status, images, opacity, handleResultClick }) {
   const [loadedImages, setLoadedImages] = useState({});
-  
+
   // Load images when results or images change
   useEffect(() => {
     const loadResultImages = async () => {
-      const newLoadedImages = { ...loadedImages };
-      
+      const newLoadedImages = {};
+
       for (const result of results) {
-        // Find matching image and annotation in the images array
         const matchingIndex = findMatchingImageIndex(result.path);
-        
+
         if (matchingIndex !== -1) {
           try {
-            // Load satellite image
-            if (!newLoadedImages[`satellite-${matchingIndex}`]) {
+            const satelliteKey = `satellite-${matchingIndex}`;
+            const maskKey = `mask-${matchingIndex}`;
+
+            if (!loadedImages[satelliteKey]) {
               const satelliteFile = await images[matchingIndex].image.getFile();
-              newLoadedImages[`satellite-${matchingIndex}`] = URL.createObjectURL(satelliteFile);
+              newLoadedImages[satelliteKey] = URL.createObjectURL(satelliteFile);
             }
-            
-            // Load annotation/mask image
-            if (!newLoadedImages[`mask-${matchingIndex}`]) {
+
+            if (!loadedImages[maskKey]) {
               const maskFile = await images[matchingIndex].annotation.getFile();
-              newLoadedImages[`mask-${matchingIndex}`] = URL.createObjectURL(maskFile);
+              newLoadedImages[maskKey] = URL.createObjectURL(maskFile);
             }
           } catch (error) {
             console.error(`Error loading images for index ${matchingIndex}:`, error);
           }
         }
       }
-      
-      setLoadedImages(newLoadedImages);
+
+      // Merge safely with previous state
+      setLoadedImages(prev => ({ ...prev, ...newLoadedImages }));
     };
-    
+
     if (results.length > 0 && images.length > 0) {
       loadResultImages();
     }
-    
-    // Cleanup function to revoke object URLs when component unmounts
+
+    // No cleanup here anymore — handled separately on unmount
+  }, [results, images]);
+
+  // Cleanup blob URLs on unmount only
+  useEffect(() => {
     return () => {
       Object.values(loadedImages).forEach(url => {
         URL.revokeObjectURL(url);
       });
     };
-  }, [results, images]);
-  
-  // Function to find the index of a matching image in the images array
+  }, []);
+
   const findMatchingImageIndex = (imageName) => {
-    // Remove file extension to get the base name
     const baseName = imageName.split('.')[0];
-    
     for (let i = 0; i < images.length; i++) {
       const filePair = images[i];
-      
-      if (filePair && filePair.image) {
-        // Check if image name matches
-        if (filePair.image.name === imageName || 
-            filePair.image.name.split('.')[0] === baseName) {
+      if (filePair?.image) {
+        if (filePair.image.name === imageName || filePair.image.name.split('.')[0] === baseName) {
           return i;
         }
       }
     }
-    
-    return -1; // No match found
+    return -1;
   };
 
   return (
@@ -76,25 +74,25 @@ function SearchResults({ results, status, images, opacity, handleResultClick }) 
           const matchingIndex = findMatchingImageIndex(result.path);
           const satelliteUrl = matchingIndex !== -1 ? loadedImages[`satellite-${matchingIndex}`] : null;
           const maskUrl = matchingIndex !== -1 ? loadedImages[`mask-${matchingIndex}`] : null;
-          
+
           return (
-            <div key={index} className="result-item" onClick={()=>{handleResultClick(matchingIndex)}}>
+            <div key={index} className="result-item" onClick={() => handleResultClick(matchingIndex)}>
               <div className="result-image-container" style={{ position: 'relative' }}>
                 {satelliteUrl ? (
-                  <img 
-                    src={satelliteUrl} 
-                    alt={`Satellite ${index}`} 
+                  <img
+                    src={satelliteUrl}
+                    alt={`Satellite ${index}`}
                     className="satellite-image"
                     style={{ width: '100%', height: 'auto', display: 'block' }}
                   />
                 ) : (
                   <div className="image-placeholder">Loading satellite image...</div>
                 )}
-                
+
                 {maskUrl && (
-                  <img 
-                    src={maskUrl} 
-                    alt={`Mask ${index}`} 
+                  <img
+                    src={maskUrl}
+                    alt={`Mask ${index}`}
                     className="mask-overlay"
                     style={{
                       position: 'absolute',

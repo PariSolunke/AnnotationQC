@@ -24,6 +24,11 @@ function App() {
     endY: 0,
   });
 
+  const lastPosRef = useRef({ x: 0, y: 0 });
+
+  const [polygonPoints, setPolygonPoints] = useState([]);
+  const [isDrawingPolygon, setIsDrawingPolygon] = useState(false);
+  const [tempPolygonPoint, setTempPolygonPoint] = useState(null);
   const [isSelecting, setIsSelecting] = useState(false);
 
   const [interactionMode, setInteractionMode] = useState('select');
@@ -132,11 +137,34 @@ function App() {
     if(interactionMode === 'draw'){
 
       if (!drawingTool) return;
-  
       const canvas = maskCanvasRef.current;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      lastPosRef.current = { x, y };
+
+      // Handle polygon tool
+      if (drawingTool === 'polygon') {
+        if (!isDrawingPolygon) {
+          // Start a new polygon
+          setPolygonPoints([{x, y}]);
+          setIsDrawingPolygon(true);
+        } else {
+          // Check if close to starting point to complete the polygon
+          const startPoint = polygonPoints[0];
+          const distance = Math.sqrt(Math.pow(x - startPoint.x, 2) + Math.pow(y - startPoint.y, 2));
+          
+          if (distance < 15 && polygonPoints.length > 2) {
+            // Complete polygon
+            completePolygon();
+          } else {
+            // Add new point
+            setPolygonPoints([...polygonPoints, {x, y}]);
+          }
+        }
+        return; // Don't set isDrawing for polygon tool
+      }
+
       setDrawingStartPos({ x, y });
       
       if (drawingTool === 'brush' || drawingTool === 'eraser') {
@@ -146,6 +174,7 @@ function App() {
         ctx.fillStyle = drawingTool === 'eraser' ? 'black' : drawingColor;
         ctx.fill();
       }
+      
       setIsDrawing(true);
     }
 
@@ -165,7 +194,7 @@ function App() {
         endX: e.clientX - rect.left,
         endY: e.clientY - rect.top,
       });
-    setIsSelecting(true);
+      setIsSelecting(true);
     }
   }
 
@@ -173,13 +202,21 @@ function App() {
     e.preventDefault(); 
 
     if(interactionMode === 'draw'){
-      if ( !isDrawing || !drawingTool || e.target.id!="mask_canvas") return;
-
       const canvas = maskCanvasRef.current;
-      const ctx = canvas.getContext('2d');
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      
+      // Handle polygon preview
+      if (drawingTool === 'polygon' && isDrawingPolygon && e.target.id === "mask_canvas") {
+        setTempPolygonPoint({x, y});
+        drawPolygonPreview();
+        return;
+      }
+
+      if (!isDrawing || !drawingTool || e.target.id !== "mask_canvas") return;
+
+      const ctx = canvas.getContext('2d');
       
       if (drawingTool === 'rectangle') {
         const tempCtx = regionCanvasRefMask.current.getContext('2d');
@@ -189,12 +226,16 @@ function App() {
         tempCtx.strokeRect(drawingStartPos.x, drawingStartPos.y, x - drawingStartPos.x, y - drawingStartPos.y);
       } else if (drawingTool === 'brush' || drawingTool === 'eraser') {
         ctx.beginPath();
-        ctx.moveTo(drawingStartPos.x, drawingStartPos.y);
+        ctx.lineWidth = 10;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(x, y);
         ctx.strokeStyle = drawingTool === 'eraser' ? 'black' : drawingColor;
-        ctx.lineWidth = 10;
         ctx.stroke();
-        setDrawingStartPos({ x, y });
+
+        lastPosRef.current = { x, y };
       }
       return;
     } 
@@ -215,36 +256,130 @@ function App() {
       }));
     }
     
-  }, [isSelecting, isDrawing, interactionMode]);
+  }, [isSelecting, isDrawing, interactionMode, drawingTool, isDrawingPolygon, polygonPoints, tempPolygonPoint]);
 
 
   useEffect(() => {
     const handleGlobalMouseUp = () => {
       setIsSelecting(false);
       setIsDrawing(false);
+      // Note: Don't reset polygon drawing on global mouse up
     };
     
     // Prevent text selection while drawing
     const handleSelectDrawStart = (e) => {
-      if (isSelecting || isDrawing) {
+      if (isSelecting || isDrawing || isDrawingPolygon) {
         e.preventDefault();
         return false;
       }
     };
     
+    // Handle ESC key to cancel polygon drawing
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isDrawingPolygon) {
+        // Cancel polygon drawing
+        setPolygonPoints([]);
+        setIsDrawingPolygon(false);
+        setTempPolygonPoint(null);
+        
+        const canvas = regionCanvasRefMask.current;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+    
     window.addEventListener('mouseup', handleGlobalMouseUp);
     document.addEventListener('selectstart', handleSelectDrawStart);
+    window.addEventListener('keydown', handleKeyDown);
     
     return () => {
       window.removeEventListener('mouseup', handleGlobalMouseUp);
       document.removeEventListener('selectstart', handleSelectDrawStart);
+      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isSelecting, isDrawing]);
+  }, [isSelecting, isDrawing, isDrawingPolygon]);
+  
+  // Function to draw the polygon preview
+  const drawPolygonPreview = useCallback(() => {
+    if (!isDrawingPolygon || polygonPoints.length === 0) return;
+    
+    const canvas = regionCanvasRefMask.current;
+    const ctx = canvas.getContext('2d');
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = drawingColor;
+    ctx.fillStyle = drawingColor;
+    ctx.lineWidth = 2;
+    
+    // Draw lines between points
+    ctx.beginPath();
+    ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
+    
+    for (let i = 1; i < polygonPoints.length; i++) {
+      ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
+    }
+    
+    // If we have a temp point, draw line to it
+    if (tempPolygonPoint) {
+      ctx.lineTo(tempPolygonPoint.x, tempPolygonPoint.y);
+    }
+    
+    ctx.stroke();
+    
+    // Draw circles at each point
+    for (const point of polygonPoints) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Draw special indicator for first point (shows where to click to complete)
+    if (polygonPoints.length > 2) {
+      ctx.strokeStyle = '#ff0000'; // Red color for completion indicator
+      ctx.beginPath();
+      ctx.arc(polygonPoints[0].x, polygonPoints[0].y, 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }, [isDrawingPolygon, polygonPoints, tempPolygonPoint, drawingColor]);
+
+  // Function to complete the polygon and fill it
+  const completePolygon = useCallback(() => {
+    if (polygonPoints.length < 3) return;
+    
+    const canvas = maskCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    // Fill the polygon
+    ctx.fillStyle = drawingColor;
+    ctx.beginPath();
+    ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
+    
+    for (let i = 1; i < polygonPoints.length; i++) {
+      ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
+    }
+    
+    ctx.closePath();
+    ctx.fill();
+    
+    // Reset polygon drawing
+    setPolygonPoints([]);
+    setIsDrawingPolygon(false);
+    setTempPolygonPoint(null);
+    
+    // Clear the preview canvas
+    const previewCtx = regionCanvasRefMask.current.getContext('2d');
+    previewCtx.clearRect(0, 0, canvas.width, canvas.height);
+  }, [polygonPoints, drawingColor]);
 
   function handleMouseUp(e) {
     if(interactionMode === 'draw') {
       e.preventDefault();
-  
+
+      // Don't handle mouse up for polygon tool (it's handled in mouse down)
+      if (drawingTool === 'polygon') {
+        return;
+      }
+
       if (!isDrawing || !drawingTool) return;
     
       const canvas = maskCanvasRef.current;
@@ -299,7 +434,7 @@ function App() {
       const formData = new FormData();
       formData.append('region_image', blob, 'region.jpg');
 
-      const response = await fetch('http://192.168.1.170:5000/api/process-region', {
+      const response = await fetch('http://216.165.113.209:5000/api/process-region', {
         method: 'POST',
         body: formData,
       });
@@ -663,6 +798,7 @@ const handleResultClick = async (index) => {
 
             <div>
               <DrawingControls 
+                interactionMode={interactionMode}
                 onToolChange={(tool) => {
                   if (tool == null){
                     setInteractionMode('select');

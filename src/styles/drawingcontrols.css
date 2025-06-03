@@ -134,3 +134,17 @@
   .clear-button:hover {
     background-color: #d33426;
   }
+
+button.color-option:disabled .color-swatch {
+  opacity: 0.1;
+}
+
+button.color-option:disabled span {
+  opacity: 0.5;
+  /* Optional: make text appear muted */
+  color: #999;
+}
+
+button.color-option:disabled {
+  cursor: not-allowed; /* Optional: visual feedback */
+}
