@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { act, useState } from 'react';
 import { Square, Circle, Save, Trash, Hexagon } from 'lucide-react';
 import '../styles/drawingcontrols.css';
 
-const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear }) => {
+const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear, onExit}) => {
   const [activeTool, setActiveTool] = useState(null);
   const [activeColor, setActiveColor] = useState('blue');
 
@@ -22,10 +22,10 @@ const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave,
   };
 
   const colorOptions = [
-    { label: 'Sidewalk', color: 'blue' },
-    { label: 'Crosswalk', color: 'red' },
-    { label: 'Background', color: 'black' },
-    { label: 'Footpath', color: 'cyan' }
+    { label: 'Sidewalk', color: 'rgb(0, 0, 255)' },
+    { label: 'Crosswalk', color: 'rgb(255, 0, 0)' },
+    { label: 'Background', color: 'rgb(0, 0, 0)' },
+    { label: 'Road', color: 'rgb(0, 128, 0)' } 
   ];
 
   return (
@@ -94,6 +94,16 @@ const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave,
           <span>Clear</span>
         </button>
       </div>
+
+      <button 
+        disabled={interactionMode !== 'draw'}
+        className="exit-button"
+        onClick={()=>{
+          handleToolSelect(activeTool)
+        }}
+        >
+          <span>Exit Drawing Mode</span>
+      </button>
     </div>
   );
 };
