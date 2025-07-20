@@ -15,6 +15,11 @@
 }
 
 
+/* Match and Mismatch buttons: same width */
+.evaluation button {
+  width: 175px;
+}
+
 .image-container {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -124,13 +129,21 @@ input[type="range"] {
 }
 
 .message {
-  background-color: #4CAF50;
+  position: fixed;
+  top: 80%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: black;
   color: white;
+  opacity: 0.5;
   padding: 10px;
-  margin: 10px 0;
-  border-radius: 5px;
-  transition: opacity 0.5s ease;
+  border-radius: 8px;
+  max-width: 350px;
+  text-align: center;
+  z-index: 9999;
+  pointer-events: none; /* ensures it doesn't block clicks */
 }
+
 
 .image-container > div > div > input {
     margin-top: 10px;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-//import Papa from 'papaparse';
+import Papa from 'papaparse';
 import ImagePreview from './components/ImagePreview';
 import './App.css';
 import SearchResults from './components/SearchResults';
@@ -7,6 +7,8 @@ import DrawingControls from './components/DrawingControls';
 
 function App() {
   const [folderHandle, setFolderHandle] = useState(null);
+  const [message, setMessage] = useState('');
+  const [showMessage, setShowMessage] = useState(false);
   const [images, setImages] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [imageURLs, setImageURLs] = useState({
@@ -15,7 +17,7 @@ function App() {
     overlay: null,
   });
   const [opacity, setOpacity] = useState(0.65);
-  //const [csvData, setCsvData] = useState([]);
+  const [csvData, setCsvData] = useState([]);
 
   const [selectedRegion, setSelectedRegion] = useState({
     startX: 0,
@@ -81,6 +83,20 @@ function App() {
       const annotationsFolder = await handle.getDirectoryHandle('annotations', { create: false });
       const imagesFolder = await handle.getDirectoryHandle('images', { create: false });
       
+      // Check if the annotation_quality.csv file exists
+      let csvFileHandle;
+      try { 
+        csvFileHandle = await handle.getFileHandle('annotation_quality.csv', { create: false });
+        const file = await csvFileHandle.getFile();
+        const fileText = await file.text();
+        const parsedCsvData = Papa.parse(fileText, { header: true }).data; // Parse the CSV file
+  
+        setCsvData(parsedCsvData); // Load the parsed data into state
+        console.log("Loaded existing CSV data:", parsedCsvData);
+      } catch (error) {
+        console.warn("annotation_quality.csv file not found. A new one will be created.");
+      }
+
       for await (const entry of annotationsFolder.values()) {
         if (entry.kind === 'file' && entry.name.endsWith('.png')) {
           try {
@@ -100,6 +116,59 @@ function App() {
       console.error("Error selecting folder: ", err);
     }
   }, [loadFiles]); // Add loadFiles as a dependency
+
+  const saveResult = async (status) => {
+    const currentImage = images[currentIndex].image.name;
+    const existingEntryIndex = csvData.findIndex(entry => entry.Image === currentImage);
+  
+    let updatedData;
+  
+    if (existingEntryIndex === -1) {
+      // Create new entry if it doesn't exist
+      const newEntry = { Image: currentImage, Status: status };
+      updatedData = [...csvData, newEntry];
+    } else {
+      // Modify existing entry
+      updatedData = csvData.map((entry, index) => 
+        index === existingEntryIndex ? { ...entry, Status: status } : entry
+      );
+    }
+
+    setCsvData(updatedData);
+    const csvContent = Papa.unparse(updatedData);
+    try {
+      const fileHandle = await folderHandle.getFileHandle('annotation_quality.csv', { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(csvContent);
+      await writable.close();
+    } catch (err) {
+      console.error("Error writing CSV file: ", err);
+    }
+    
+  };
+
+  useEffect(() => {
+    if (showMessage) {
+      const timer = setTimeout(() => {
+        setShowMessage(false);
+      }, 1000); // Hide message after 2 seconds
+
+      return () => clearTimeout(timer);
+    }
+  }, [showMessage]);
+
+  const handleMatch = () => {
+    saveResult('good');
+    setMessage('Updated Status: Match');
+    setShowMessage(true);
+
+  };
+
+  const handleMismatch = () => {
+    saveResult('bad');
+    setMessage('Updated Status: Mismatch');
+    setShowMessage(true);
+  };
 
   const drawRegionCanvas = useCallback(() => {
     const regionCanvases = [
@@ -434,7 +503,7 @@ function App() {
       const formData = new FormData();
       formData.append('region_image', blob, 'region.jpg');
 
-      const response = await fetch('http://216.165.113.209:5000/api/process-region', {
+      const response = await fetch('http://192.168.1.170:5000/api/process-region', {
         method: 'POST',
         body: formData,
       });
@@ -838,15 +907,28 @@ const handleResultClick = async (index) => {
             </div>
 
             <div></div>
+
             <div>
+
             <div className="controls">
-            <button onClick={handlePrevious} disabled={currentIndex === 0}>
-              Previous
-            </button>
-            <button onClick={handleNext} disabled={currentIndex === images.length - 1}>
-              Next
-            </button>
-          </div>
+              <button onClick={handlePrevious} disabled={currentIndex === 0}>
+                Previous
+              </button>
+              <button onClick={handleNext} disabled={currentIndex === images.length - 1}>
+                Next
+              </button>
+
+            </div>
+
+
+              <div className="evaluation">
+                <button onClick={handleMatch}>Report Match</button>
+                <button onClick={handleMismatch}>Report Mismatch</button>
+              </div>
+
+              {showMessage && (
+                <div className="message">{message}</div>
+              )}
 
           <div className="search-controls">
             <button onClick={() => handleQuery('satellite')}>
