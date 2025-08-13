@@ -4,6 +4,7 @@ import ImagePreview from './components/ImagePreview';
 import './App.css';
 import SearchResults from './components/SearchResults';
 import DrawingControls from './components/DrawingControls';
+import { flushSync } from 'react-dom';
 
 function App() {
   const [folderHandle, setFolderHandle] = useState(null);
@@ -28,6 +29,7 @@ function App() {
 
   const lastPosRef = useRef({ x: 0, y: 0 });
 
+  
   const [polygonPoints, setPolygonPoints] = useState([]);
   const [isDrawingPolygon, setIsDrawingPolygon] = useState(false);
   const [tempPolygonPoint, setTempPolygonPoint] = useState(null);
@@ -39,6 +41,14 @@ function App() {
   const [drawingTool, setDrawingTool] = useState(null);
   const [drawingColor, setDrawingColor] = useState('blue');
   const [drawingStartPos, setDrawingStartPos] = useState({ x: 0, y: 0 });
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [lastPanPoint, setLastPanPoint] = useState({ x: 0, y: 0 });
+
+  // Store all drawing operations
+  const [drawingOperations, setDrawingOperations] = useState([]);
+  const [currentStroke, setCurrentStroke] = useState(null); // For brush/eraser strokes in progress
 
   const [status, setStatus] = useState('Ready');
   const [searchResults, setSearchResults] = useState([]); 
@@ -201,15 +211,289 @@ function App() {
     });
   }, [selectedRegion, isSelecting, drawnRegion]);
   
-  const handleMouseDown = (e) => {
-    e.preventDefault();
-    if(interactionMode === 'draw'){
+  const handleWheel = useCallback((e) => {
+  if (interactionMode !== 'draw') return;
+  e.stopPropagation();
+  e.preventDefault();
+  
+  const canvas = e.target;
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+  
+  // Convert mouse position to image coordinates before zoom
+  const imageX = (mouseX - panOffset.x) / zoomLevel;
+  const imageY = (mouseY - panOffset.y) / zoomLevel;
+  
+  // Determine zoom direction and factor
+  const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+  const newZoomLevel = Math.max(0.1, Math.min(5, zoomLevel * zoomFactor));
+  
+  // Calculate new pan offset to keep mouse position fixed on the image
+  const newPanOffsetX = mouseX - imageX * newZoomLevel;
+  const newPanOffsetY = mouseY - imageY * newZoomLevel;
+  
+  setZoomLevel(newZoomLevel);
+  setPanOffset({ x: newPanOffsetX, y: newPanOffsetY });
+  
+  // Redraw the canvas with new zoom/pan
+  redrawCanvas(maskCanvasRef.current, newZoomLevel, { x: newPanOffsetX, y: newPanOffsetY });
+  
+}, [interactionMode, zoomLevel, panOffset]);
 
+// Function to redraw canvas with image + all drawing operations
+const redrawCanvas = useCallback((canvas, zoom, offset) => {
+  if (!canvas || !imageURLs.mask) return;
+  
+  const ctx = canvas.getContext('2d');
+  const img = new Image();
+  
+  img.onload = () => {
+    // Clear the canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Save the current context state
+    ctx.save();
+    
+    // Apply zoom and pan transformations
+    ctx.translate(offset.x, offset.y);
+    ctx.scale(zoom, zoom);
+    
+    // Draw the base image
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    
+    // Redraw all stored drawing operations
+    redrawAllOperations(ctx);
+    
+    // Restore the context state
+    ctx.restore();
+  };
+  
+  img.src = imageURLs.mask;
+}, [imageURLs.mask, drawingOperations]);
+
+  const redrawAllOperations = useCallback((ctx) => {
+    drawingOperations.forEach(operation => {
+      ctx.save();
+      
+      switch (operation.type) {
+        case 'brush':
+        case 'eraser':
+          ctx.strokeStyle = operation.color;
+          ctx.lineWidth = operation.lineWidth;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          if (operation.points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(operation.points[0].x, operation.points[0].y);
+            
+            for (let i = 1; i < operation.points.length; i++) {
+              ctx.lineTo(operation.points[i].x, operation.points[i].y);
+            }
+            
+            ctx.stroke();
+          } else if (operation.points.length === 1) {
+            // Single point (dot)
+            ctx.beginPath();
+            ctx.arc(operation.points[0].x, operation.points[0].y, operation.lineWidth / 2, 0, Math.PI * 2);
+            ctx.fillStyle = operation.color;
+            ctx.fill();
+          }
+          break;
+          
+        case 'rectangle':
+          ctx.fillStyle = operation.color;
+          ctx.fillRect(operation.x, operation.y, operation.width, operation.height);
+          break;
+          
+        case 'polygon':
+          if (operation.points.length >= 3) {
+            ctx.fillStyle = operation.color;
+            ctx.beginPath();
+            ctx.moveTo(operation.points[0].x, operation.points[0].y);
+            
+            for (let i = 1; i < operation.points.length; i++) {
+              ctx.lineTo(operation.points[i].x, operation.points[i].y);
+            }
+            
+            ctx.closePath();
+            ctx.fill();
+          }
+          break;
+          
+        case 'bridge':
+          // Handle bridge operations
+          ctx.strokeStyle = operation.color;
+          ctx.lineWidth = operation.lineWidth;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          ctx.beginPath();
+          ctx.moveTo(operation.startX, operation.startY);
+          ctx.lineTo(operation.endX, operation.endY);
+          ctx.stroke();
+          break;
+      }
+      
+      ctx.restore();
+    });
+  }, [drawingOperations]);
+
+  // Function to store a completed drawing operation
+  const storeDrawingOperation = useCallback((operation) => {
+    setDrawingOperations(prev => [...prev, {
+      ...operation,
+      id: Date.now() + Math.random(), // Unique ID for each operation
+      timestamp: Date.now()
+    }]);
+  }, []);
+
+  // Convert screen coordinates to image coordinates
+  const screenToImageCoords = useCallback((screenX, screenY) => {
+    const imageX = (screenX - panOffset.x) / zoomLevel;
+    const imageY = (screenY - panOffset.y) / zoomLevel;
+    return { x: imageX, y: imageY };
+  }, [zoomLevel, panOffset]);
+
+  // Add panning functionality
+  const handlePanStart = useCallback((e) => {
+    if (interactionMode !== 'draw') return;
+    if (e.button === 1 || (e.button === 0 && e.shiftKey)) { // Middle mouse or Ctrl+shift click
+      e.preventDefault();
+      setIsPanning(true);
+      setLastPanPoint({ x: e.clientX, y: e.clientY });
+    }
+  }, [interactionMode]);
+
+  const handlePanMove = useCallback((e) => {
+    if (!isPanning) return;
+    
+    e.preventDefault();
+    const deltaX = e.clientX - lastPanPoint.x;
+    const deltaY = e.clientY - lastPanPoint.y;
+    
+    const newPanOffset = {
+      x: panOffset.x + deltaX,
+      y: panOffset.y + deltaY
+    };
+    
+    setPanOffset(newPanOffset);
+    setLastPanPoint({ x: e.clientX, y: e.clientY });
+    
+    // Redraw canvas with new pan offset
+    redrawCanvas(maskCanvasRef.current, zoomLevel, newPanOffset);
+    
+  }, [isPanning, lastPanPoint, panOffset, zoomLevel, redrawCanvas]);
+
+
+    const drawPolygonPreview = useCallback(() => {
+    if (!isDrawingPolygon || polygonPoints.length === 0) return;
+    
+    const canvas = regionCanvasRefMask.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Apply zoom/pan transform
+    ctx.save();
+    ctx.translate(panOffset.x, panOffset.y);
+    ctx.scale(zoomLevel, zoomLevel);
+    
+    ctx.strokeStyle = drawingColor;
+    ctx.fillStyle = drawingColor;
+    ctx.lineWidth = 2 / zoomLevel; // Scale line width inversely to maintain consistent appearance
+    
+    // Draw lines between points
+    if (polygonPoints.length > 0) {
+      ctx.beginPath();
+      ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
+      
+      for (let i = 1; i < polygonPoints.length; i++) {
+        ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
+      }
+      
+      // If we have a temp point, draw line to it
+      if (tempPolygonPoint) {
+        ctx.lineTo(tempPolygonPoint.x, tempPolygonPoint.y);
+      }
+      
+      ctx.stroke();
+    }
+    
+    // Draw circles at each point - scale the radius inversely to maintain consistent size
+    const pointRadius = 4 / zoomLevel;
+    for (const point of polygonPoints) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Draw special indicator for first point when we can close the polygon
+    if (polygonPoints.length > 2) {
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 2 / zoomLevel;
+      ctx.beginPath();
+      ctx.arc(polygonPoints[0].x, polygonPoints[0].y, 8 / zoomLevel, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    
+    ctx.restore();
+  }, [isDrawingPolygon, polygonPoints, tempPolygonPoint, drawingColor, zoomLevel, panOffset]);
+
+  const completePolygon = useCallback(() => {
+    if (polygonPoints.length < 3) return;
+    
+    // Store polygon operation
+    storeDrawingOperation({
+      type: 'polygon',
+      points: [...polygonPoints], 
+      color: drawingColor
+    });
+    
+    // Reset polygon drawing
+    setPolygonPoints([]);
+    setIsDrawingPolygon(false);
+    setTempPolygonPoint(null);
+    
+    // Clear the preview canvas
+    const previewCtx = regionCanvasRefMask.current.getContext('2d');
+    if (previewCtx) {
+      previewCtx.clearRect(0, 0, previewCtx.canvas.width, previewCtx.canvas.height);
+    }
+    
+    // Redraw the main canvas
+    //redrawCanvas(maskCanvasRef.current, zoomLevel, panOffset);
+  }, [polygonPoints, drawingColor, storeDrawingOperation, zoomLevel, panOffset, redrawCanvas]);
+
+  //  zoom reset function
+  const resetZoom = useCallback(() => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+    redrawCanvas(maskCanvasRef.current, 1, { x: 0, y: 0 });
+  }, [redrawCanvas]);
+
+
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault();
+  
+    // Handle panning first
+    if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+      handlePanStart(e);
+      return;
+    }
+    
+    if(interactionMode === 'draw'){
       if (!drawingTool) return;
+      
       const canvas = maskCanvasRef.current;
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const { x, y } = screenToImageCoords(screenX, screenY);
+      
       lastPosRef.current = { x, y };
 
       // Handle polygon tool
@@ -223,7 +507,10 @@ function App() {
           const startPoint = polygonPoints[0];
           const distance = Math.sqrt(Math.pow(x - startPoint.x, 2) + Math.pow(y - startPoint.y, 2));
           
-          if (distance < 15 && polygonPoints.length > 2) {
+          // Scale the threshold with zoom level for consistent feel
+          const threshold = 15 / zoomLevel;
+          
+          if (distance < threshold && polygonPoints.length > 2) {
             // Complete polygon
             completePolygon();
           } else {
@@ -237,16 +524,17 @@ function App() {
       setDrawingStartPos({ x, y });
       
       if (drawingTool === 'brush' || drawingTool === 'eraser') {
-        const ctx = canvas.getContext('2d');
-        ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = drawingTool === 'eraser' ? 'black' : drawingColor;
-        ctx.fill();
+        // Start a new stroke
+        setCurrentStroke({
+          type: drawingTool,
+          color: drawingTool === 'eraser' ? 'black' : drawingColor,
+          lineWidth: 10,
+          points: [{x, y}]
+        });
       }
       
       setIsDrawing(true);
     }
-
     else{
       let canvas = satelliteCanvasRef.current;
     
@@ -257,52 +545,72 @@ function App() {
 
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const { x, y } = screenToImageCoords(screenX, screenY);
+      
       setSelectedRegion({
-        startX: e.clientX - rect.left,
-        startY: e.clientY - rect.top,
-        endX: e.clientX - rect.left,
-        endY: e.clientY - rect.top,
+        startX: x,
+        startY: y,
+        endX: x,
+        endY: y,
       });
       setIsSelecting(true);
     }
-  }
+  }, [interactionMode, drawingTool, screenToImageCoords, handlePanStart, isDrawingPolygon, polygonPoints, drawingColor, zoomLevel]);
 
   const handleMouseMove = useCallback((e) => {
     e.preventDefault(); 
+    
+    // Handle panning first
+    if (isPanning) {
+      handlePanMove(e);
+      return;
+    }
 
     if(interactionMode === 'draw'){
       const canvas = maskCanvasRef.current;
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const { x, y } = screenToImageCoords(screenX, screenY);
       
       // Handle polygon preview
       if (drawingTool === 'polygon' && isDrawingPolygon && e.target.id === "mask_canvas") {
         setTempPolygonPoint({x, y});
-        drawPolygonPreview();
+        // Call drawPolygonPreview in the next frame to ensure state is updated
+        requestAnimationFrame(() => drawPolygonPreview());
         return;
       }
 
       if (!isDrawing || !drawingTool || e.target.id !== "mask_canvas") return;
 
-      const ctx = canvas.getContext('2d');
-      
       if (drawingTool === 'rectangle') {
         const tempCtx = regionCanvasRefMask.current.getContext('2d');
         tempCtx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Apply zoom/pan transform for preview
+        tempCtx.save();
+        tempCtx.translate(panOffset.x, panOffset.y);
+        tempCtx.scale(zoomLevel, zoomLevel);
+        
         tempCtx.strokeStyle = drawingColor;
         tempCtx.lineWidth = 2;
         tempCtx.strokeRect(drawingStartPos.x, drawingStartPos.y, x - drawingStartPos.x, y - drawingStartPos.y);
-      } else if (drawingTool === 'brush' || drawingTool === 'eraser') {
-        ctx.beginPath();
-        ctx.lineWidth = 10;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
         
-        ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
-        ctx.lineTo(x, y);
-        ctx.strokeStyle = drawingTool === 'eraser' ? 'black' : drawingColor;
-        ctx.stroke();
+        tempCtx.restore();
+      } else if (drawingTool === 'brush' || drawingTool === 'eraser') {
+        // Add point to current stroke
+        if (currentStroke) {
+          const updatedStroke = {
+            ...currentStroke,
+            points: [...currentStroke.points, {x, y}]
+          };
+          setCurrentStroke(updatedStroke);
+          
+          // Redraw canvas with current stroke included
+          redrawCanvasWithCurrentStroke(canvas, zoomLevel, panOffset, updatedStroke);
+        }
 
         lastPosRef.current = { x, y };
       }
@@ -318,129 +626,20 @@ function App() {
       
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const { x, y } = screenToImageCoords(screenX, screenY);
+      
       setSelectedRegion((prev) => ({
         ...prev,
-        endX: e.clientX - rect.left,
-        endY: e.clientY - rect.top,
+        endX: x,
+        endY: y,
       }));
     }
     
-  }, [isSelecting, isDrawing, interactionMode, drawingTool, isDrawingPolygon, polygonPoints, tempPolygonPoint]);
+  }, [isSelecting, isDrawing, interactionMode, drawingTool, isDrawingPolygon, screenToImageCoords, panOffset, zoomLevel, isPanning, handlePanMove, currentStroke, drawPolygonPreview]);
 
-
-  useEffect(() => {
-    const handleGlobalMouseUp = () => {
-      setIsSelecting(false);
-      setIsDrawing(false);
-      // Note: Don't reset polygon drawing on global mouse up
-    };
-    
-    // Prevent text selection while drawing
-    const handleSelectDrawStart = (e) => {
-      if (isSelecting || isDrawing || isDrawingPolygon) {
-        e.preventDefault();
-        return false;
-      }
-    };
-    
-    // Handle ESC key to cancel polygon drawing
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && isDrawingPolygon) {
-        // Cancel polygon drawing
-        setPolygonPoints([]);
-        setIsDrawingPolygon(false);
-        setTempPolygonPoint(null);
-        
-        const canvas = regionCanvasRefMask.current;
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    };
-    
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-    document.addEventListener('selectstart', handleSelectDrawStart);
-    window.addEventListener('keydown', handleKeyDown);
-    
-    return () => {
-      window.removeEventListener('mouseup', handleGlobalMouseUp);
-      document.removeEventListener('selectstart', handleSelectDrawStart);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isSelecting, isDrawing, isDrawingPolygon]);
-  
-  // Function to draw the polygon preview
-  const drawPolygonPreview = useCallback(() => {
-    if (!isDrawingPolygon || polygonPoints.length === 0) return;
-    
-    const canvas = regionCanvasRefMask.current;
-    const ctx = canvas.getContext('2d');
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = drawingColor;
-    ctx.fillStyle = drawingColor;
-    ctx.lineWidth = 2;
-    
-    // Draw lines between points
-    ctx.beginPath();
-    ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
-    
-    for (let i = 1; i < polygonPoints.length; i++) {
-      ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
-    }
-    
-    // If we have a temp point, draw line to it
-    if (tempPolygonPoint) {
-      ctx.lineTo(tempPolygonPoint.x, tempPolygonPoint.y);
-    }
-    
-    ctx.stroke();
-    
-    // Draw circles at each point
-    for (const point of polygonPoints) {
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    
-    // Draw special indicator for first point (shows where to click to complete)
-    if (polygonPoints.length > 2) {
-      ctx.strokeStyle = '#ff0000'; // Red color for completion indicator
-      ctx.beginPath();
-      ctx.arc(polygonPoints[0].x, polygonPoints[0].y, 8, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }, [isDrawingPolygon, polygonPoints, tempPolygonPoint, drawingColor]);
-
-  // Function to complete the polygon and fill it
-  const completePolygon = useCallback(() => {
-    if (polygonPoints.length < 3) return;
-    
-    const canvas = maskCanvasRef.current;
-    const ctx = canvas.getContext('2d');
-    
-    // Fill the polygon
-    ctx.fillStyle = drawingColor;
-    ctx.beginPath();
-    ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
-    
-    for (let i = 1; i < polygonPoints.length; i++) {
-      ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
-    }
-    
-    ctx.closePath();
-    ctx.fill();
-    
-    // Reset polygon drawing
-    setPolygonPoints([]);
-    setIsDrawingPolygon(false);
-    setTempPolygonPoint(null);
-    
-    // Clear the preview canvas
-    const previewCtx = regionCanvasRefMask.current.getContext('2d');
-    previewCtx.clearRect(0, 0, canvas.width, canvas.height);
-  }, [polygonPoints, drawingColor]);
-
-  function handleMouseUp(e) {
+  const handleMouseUp = useCallback((e) => {
     if(interactionMode === 'draw') {
       e.preventDefault();
 
@@ -452,18 +651,37 @@ function App() {
       if (!isDrawing || !drawingTool) return;
     
       const canvas = maskCanvasRef.current;
-      const ctx = canvas.getContext('2d');
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const screenX = e.clientX - rect.left;
+      const screenY = e.clientY - rect.top;
+      const { x, y } = screenToImageCoords(screenX, screenY);
       
       if (drawingTool === 'rectangle') {
-        ctx.fillStyle = drawingColor;
-        ctx.fillRect(drawingStartPos.x, drawingStartPos.y, x - drawingStartPos.x, y - drawingStartPos.y);
+        // Store rectangle operation
+        storeDrawingOperation({
+          type: 'rectangle',
+          x: drawingStartPos.x,
+          y: drawingStartPos.y,
+          width: x - drawingStartPos.x,
+          height: y - drawingStartPos.y,
+          color: drawingColor
+        });
         
         // Clear the temporary canvas
         const tempCtx = regionCanvasRefMask.current.getContext('2d');
         tempCtx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Redraw the main canvas
+        //redrawCanvas(canvas, zoomLevel, panOffset);
+      } else if (drawingTool === 'brush' || drawingTool === 'eraser') {
+        // Store the completed stroke
+        if (currentStroke) {
+          storeDrawingOperation(currentStroke);
+          setCurrentStroke(null);
+        }
+        
+        // Redraw the canvas
+        //redrawCanvas(canvas, zoomLevel, panOffset);
       }
       
       setIsDrawing(false);
@@ -473,7 +691,159 @@ function App() {
       setIsSelecting(false);
       setDrawnRegion(selectedRegion);
     }
-  }
+  }, [interactionMode, drawingTool, isDrawing, screenToImageCoords, drawingStartPos, drawingColor, zoomLevel, panOffset, redrawCanvas, currentStroke, storeDrawingOperation, selectedRegion]);
+
+  // Function to redraw canvas including current stroke in progress
+  const redrawCanvasWithCurrentStroke = useCallback((canvas, zoom, offset, stroke) => {
+    if (!canvas || !imageURLs.mask) return;
+    
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    
+    img.onload = () => {
+      // Clear the canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Save the current context state
+      ctx.save();
+      
+      // Apply zoom and pan transformations
+      ctx.translate(offset.x, offset.y);
+      ctx.scale(zoom, zoom);
+      
+      // Draw the base image
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      // Redraw all stored operations
+      redrawAllOperations(ctx);
+      
+      // Draw current stroke in progress
+      if (stroke && stroke.points.length > 0) {
+        ctx.strokeStyle = stroke.color;
+        ctx.lineWidth = stroke.lineWidth;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        if (stroke.points.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+          
+          for (let i = 1; i < stroke.points.length; i++) {
+            ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+          }
+          
+          ctx.stroke();
+        } else {
+          // Single point (dot)
+          ctx.beginPath();
+          ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.lineWidth / 2, 0, Math.PI * 2);
+          ctx.fillStyle = stroke.color;
+          ctx.fill();
+        }
+      }
+      
+      // Restore the context state
+      ctx.restore();
+    };
+    
+    img.src = imageURLs.mask;
+  }, [imageURLs.mask, redrawAllOperations]);
+
+
+const undoLastOperation = useCallback(async () => {
+  if (drawingOperations.length === 0) return;
+  
+  const lastOperation = drawingOperations[drawingOperations.length - 1];
+  
+  // Force synchronous state update
+  flushSync(() => {
+    if (lastOperation.type === 'bridge') {
+      setDrawingOperations(prev => prev.filter(op => op.type !== 'bridge'));
+    } else {
+      setDrawingOperations(prev => prev.slice(0, -1));
+    }
+  });
+  
+
+}, [drawingOperations, redrawCanvas, zoomLevel, panOffset]);
+
+
+  // Function to clear all drawing operations
+  const clearAllOperations = useCallback(() => {
+    setDrawingOperations([]);
+    redrawCanvas(maskCanvasRef.current, zoomLevel, panOffset);
+  }, [redrawCanvas, zoomLevel, panOffset]);
+
+// Function to remove specific operation by ID
+  const removeOperation = useCallback((operationId) => {
+    setDrawingOperations(prev => prev.filter(op => op.id !== operationId));
+    
+    // Redraw canvas without the removed operation
+    setTimeout(() => {
+      redrawCanvas(maskCanvasRef.current, zoomLevel, panOffset);
+    }, 0);
+  }, [redrawCanvas, zoomLevel, panOffset]);
+
+  // Effect to redraw canvas when images change
+  useEffect(() => {
+    if (maskCanvasRef.current && imageURLs.mask) {
+      redrawCanvas(maskCanvasRef.current, zoomLevel, panOffset);
+    }
+  }, [imageURLs.mask, zoomLevel, panOffset, redrawCanvas]);
+
+  //  effect to handle global mouse events
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsSelecting(false);
+      setIsDrawing(false);
+      setIsPanning(false);
+    };
+    
+    const handleGlobalMouseMove = (e) => {
+      if (isPanning) {
+        handlePanMove(e);
+      }
+    };
+    
+    const handleSelectDrawStart = (e) => {
+      if (isSelecting || isDrawing || isDrawingPolygon || isPanning) {
+        e.preventDefault();
+        return false;
+      }
+    };
+    
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (isDrawingPolygon) {
+          setPolygonPoints([]);
+          setIsDrawingPolygon(false);
+          setTempPolygonPoint(null);
+          
+          const canvas = regionCanvasRefMask.current;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        } else {
+          resetZoom();
+        }
+      } else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        undoLastOperation();
+      }
+    };
+    
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    document.addEventListener('selectstart', handleSelectDrawStart);
+    window.addEventListener('keydown', handleKeyDown);
+    
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('selectstart', handleSelectDrawStart);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSelecting, isDrawing, isDrawingPolygon, isPanning, handlePanMove, resetZoom, undoLastOperation]);
+
 
   const handleQuery = useCallback(async (queryType) => {
     if (drawnRegion.startX === drawnRegion.endX && drawnRegion.startY === drawnRegion.endY) {
@@ -525,7 +895,6 @@ function App() {
   }, [drawnRegion]);
 
   useEffect(() => {
-
     const syncRegionCanvas = (regionCanvas, imageCanvas) => {
       
       if (regionCanvas && imageCanvas) {
@@ -652,6 +1021,9 @@ function App() {
 
   // Navigation handlers
   const handleNext = async () => {
+    await resetZoomPromise();
+    setDrawingOperations([]);
+
     if (currentIndex < images.length - 1) {
       const newIndex = currentIndex + 1;
       setCurrentIndex(newIndex);
@@ -663,6 +1035,9 @@ function App() {
   };
 
   const handlePrevious = async () => {
+    await resetZoomPromise();
+    setDrawingOperations([]);
+
     if (currentIndex > 0) {
       const newIndex = currentIndex - 1;
       setCurrentIndex(newIndex);
@@ -682,16 +1057,257 @@ function App() {
     }
   };
 
-const handleResultClick = async (index) => {
-    if (index >= 0 && index < images.length) {
-      setCurrentIndex(index);
-      setSearchResults([]);
-      setStatus('Ready'); 
-      await loadFiles(images[index]);
+  const handleResultClick = async (index) => {
+      if (index >= 0 && index < images.length) {
+        setCurrentIndex(index);
+        setSearchResults([]);
+        setStatus('Ready'); 
+        await loadFiles(images[index]);
+      }
+    };
+
+  // Helper functions for multi-type image analysis
+  const getPixelRGB = (imageData, x, y) => {
+    if (x < 0 || y < 0 || x >= imageData.width || y >= imageData.height) 
+      return { r: 0, g: 0, b: 0 };
+    
+    const idx = (y * imageData.width + x) * 4;
+    return {
+      r: imageData.data[idx],
+      g: imageData.data[idx + 1],
+      b: imageData.data[idx + 2]
+    };
+  };
+
+  const getPixelType = (imageData, x, y) => {
+    const { r, g, b } = getPixelRGB(imageData, x, y);
+    
+    // Define thresholds for different pixel types
+    if (r < 50 && g < 50 && b > 200) return 'sidewalk';    // Blue (0,0,255)
+    if (r > 200 && g < 50 && b < 50) return 'crosswalk';   // Red (255,0,0)
+    if (r < 50 && g > 100 && g < 160 && b < 50) return 'road'; // Green (0,128,0)
+    if (r < 50 && g < 50 && b < 50) return 'background';   // Black (0,0,0)
+    
+    return 'background'; // Everything else defaults to background
+  };
+
+
+  const hasNeighborOfType = (imageData, x, y, targetType) => {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        if (getPixelType(imageData, x + dx, y + dy) === targetType) {
+          return true;
+        }
+      }
     }
+    return false;
+  };
+
+  const isGapBridgeable = (imageData, x1, y1, x2, y2) => {
+    const steps = Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1));
+    let roadCount = 0;
+    let backgroundCount = 0;
+    let sidewalkCrosswalkCount = 0;
+    
+    for (let i = 0; i <= steps; i++) {
+      const t = steps === 0 ? 0 : i / steps;
+      const x = Math.round(x1 + t * (x2 - x1));
+      const y = Math.round(y1 + t * (y2 - y1));
+      const pixelType = getPixelType(imageData, x, y);
+      
+      if (pixelType === 'road') roadCount++;
+      else if (pixelType === 'background') backgroundCount++;
+      else if (pixelType === 'sidewalk' || pixelType === 'crosswalk') sidewalkCrosswalkCount++;
+    }
+    
+    const totalPixels = steps + 1;
+    
+    // Bridge if gap is mostly road or background, but not if it's already mostly connected
+    return (roadCount + backgroundCount) / totalPixels > 0.6 && 
+          sidewalkCrosswalkCount / totalPixels < 0.4;
+  };
+
+
+  const redrawCanvasPromise = useCallback((canvas, zoom, offset) => {
+    if (!canvas || !imageURLs.mask) return Promise.resolve();
+    
+    return new Promise((resolve) => {
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      
+      img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.translate(offset.x, offset.y);
+        ctx.scale(zoom, zoom);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        redrawAllOperations(ctx);
+        ctx.restore();
+        
+        // Resolve after drawing is complete
+        requestAnimationFrame(resolve);
+      };
+      
+      img.src = imageURLs.mask;
+    });
+  }, [imageURLs.mask, drawingOperations]);
+
+  const resetZoomPromise = useCallback(async () => {
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
+    
+    // Wait for state updates
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    
+    // Wait for canvas redraw to complete
+    await redrawCanvasPromise(maskCanvasRef.current, 1, { x: 0, y: 0 });
+  }, [redrawCanvasPromise]);
+
+
+  // Modified gap bridging function that stores operations
+  const bridgeSidewalkCrosswalkGaps = async () => {
+    await resetZoomPromise();
+    const canvas = maskCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    
+    // Find all sidewalk and crosswalk pixels
+    const sidewalkPixels = [];
+    const crosswalkPixels = [];
+    
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const pixelType = getPixelType(imageData, x, y);
+        if (pixelType === 'sidewalk') {
+          sidewalkPixels.push({x, y, type: 'sidewalk'});
+        } else if (pixelType === 'crosswalk') {
+          crosswalkPixels.push({x, y, type: 'crosswalk'});
+        }
+      }
+    }
+    
+    // Find edge pixels for both types
+    const sidewalkEdges = sidewalkPixels.filter(({x, y}) => {
+      return hasNeighborOfType(imageData, x, y, 'road') || 
+            hasNeighborOfType(imageData, x, y, 'background');
+    });
+    
+    const crosswalkEdges = crosswalkPixels.filter(({x, y}) => {
+      return hasNeighborOfType(imageData, x, y, 'road') || 
+            hasNeighborOfType(imageData, x, y, 'background');
+    });
+    
+    let bridgesCreated = 0;
+    const maxGapDistance = 20;
+    const minGapDistance = 3;
+    
+    // Store bridge operations instead of drawing directly
+    const bridgeOperations = [];
+    
+    for (const sidewalkEdge of sidewalkEdges) {
+      const {x: x1, y: y1} = sidewalkEdge;
+      
+      for (const crosswalkEdge of crosswalkEdges) {
+        const {x: x2, y: y2} = crosswalkEdge;
+        const distance = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
+        
+        if (distance >= minGapDistance && distance <= maxGapDistance) {
+          if (isGapBridgeable(imageData, x1, y1, x2, y2)) {
+            // Instead of drawing directly, store the bridge operation
+            bridgeOperations.push({
+              type: 'bridge',
+              bridgeType: 'sidewalk-crosswalk',
+              startX: x1,
+              startY: y1,
+              endX: x2,
+              endY: y2,
+              color: getColorForBridgeType('sidewalk-crosswalk'), // You'll need to define this
+              lineWidth: getBridgeLineWidth('sidewalk-crosswalk') // You'll need to define this
+            });
+            bridgesCreated++;
+          }
+        }
+      }
+    }
+    
+    // Store all bridge operations at once
+    if (bridgeOperations.length > 0) {
+      setDrawingOperations(prev => [...prev, ...bridgeOperations.map(op => ({
+        ...op,
+        id: Date.now() + Math.random(),
+        timestamp: Date.now()
+      }))]);
+    }
+    
+    console.log(`Created ${bridgesCreated} sidewalk-crosswalk bridges!`);
+  };
+
+  /*
+  // Alternative: Bridge any walkable areas (both sidewalk and crosswalk)
+  const bridgeWalkableGaps = () => {
+    const canvas = maskCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    
+    // Find all walkable pixels (sidewalk + crosswalk)
+    const walkablePixels = [];
+    
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const pixelType = getPixelType(imageData, x, y);
+        if (pixelType === 'sidewalk' || pixelType === 'crosswalk') {
+          walkablePixels.push({x, y, type: pixelType});
+        }
+      }
+    }
+    
+    // Find edge pixels
+    const edgePixels = walkablePixels.filter(({x, y}) => {
+      return hasNeighborOfType(imageData, x, y, 'road') || 
+            hasNeighborOfType(imageData, x, y, 'background');
+    });
+    
+    let bridgesCreated = 0;
+    const maxGapDistance = 15;
+    
+    // Bridge between any walkable edge pixels
+    for (let i = 0; i < edgePixels.length; i++) {
+      const {x: x1, y: y1, type: type1} = edgePixels[i];
+      
+      for (let j = i + 1; j < edgePixels.length; j++) {
+        const {x: x2, y: y2, type: type2} = edgePixels[j];
+        const distance = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
+        
+        if (distance > 3 && distance <= maxGapDistance) {
+          if (isGapBridgeable(imageData, x1, y1, x2, y2)) {
+            // Determine bridge type
+            let bridgeType = 'same';
+            if (type1 !== type2) {
+              bridgeType = 'sidewalk-crosswalk';
+            }
+            
+            drawBridgeLine(ctx, x1, y1, x2, y2, bridgeType);
+            bridgesCreated++;
+          }
+        }
+      }
+    }
+    
+    console.log(`Created ${bridgesCreated} walkable area bridges!`);
+  };
+  */
+
+  const getColorForBridgeType = (bridgeType) => {
+    return 'rgb(255, 0, 0)'; 
+  };
+
+  const getBridgeLineWidth = (bridgeType) => {
+    return 3; 
   };
 
   const onSave = async () => {
+    await resetZoomPromise();
     // Check if we have the necessary references
     if (!maskCanvasRef.current || !folderHandle || !images || !currentIndex) {
       console.error("Missing required references for saving");
@@ -730,12 +1346,14 @@ const handleResultClick = async (index) => {
   };
 
   const onClear = async () => {
+    clearAllOperations();
+    resetZoom();
     // Check if we have the necessary references
     if (!maskCanvasRef.current || !images || currentIndex === undefined) {
       console.error("Missing required references for clearing");
       return;
     }
-  
+    
     try {
       // Get the current image file pair
       const currentFilePair = images[currentIndex];
@@ -764,7 +1382,7 @@ const handleResultClick = async (index) => {
         console.log("Canvas cleared and reset to original annotation");
       };
       
-      // If you have any temporary drawing canvas, clear that too
+      // clear ant temporary canvas contexts
       if (regionCanvasRefMask && regionCanvasRefMask.current) {
         const tempCtx = regionCanvasRefMask.current.getContext('2d');
         tempCtx.clearRect(0, 0, regionCanvasRefMask.current.width, regionCanvasRefMask.current.height);
@@ -775,7 +1393,36 @@ const handleResultClick = async (index) => {
       alert("Failed to reset the canvas. See console for details.");
     }
   };
+
+
     
+  useEffect(() => {
+    const maskCanvas = maskCanvasRef.current;
+    const regionCanvas = regionCanvasRefMask.current;
+
+    const wheelHandler = (e) => {
+      if (interactionMode === 'draw') {
+        e.preventDefault(); // block scrolling
+        handleWheel(e);    
+      }
+    };
+
+    if (maskCanvas) {
+      maskCanvas.addEventListener("wheel", wheelHandler, { passive: false });
+    }
+    if (regionCanvas) {
+      regionCanvas.addEventListener("wheel", wheelHandler, { passive: false });
+    }
+
+    return () => {
+      if (maskCanvas) {
+        maskCanvas.removeEventListener("wheel", wheelHandler);
+      }
+      if (regionCanvas) {
+        regionCanvas.removeEventListener("wheel", wheelHandler);
+      }
+    };
+  }, [handleWheel, interactionMode]);
 
   return (
     <div className="App">
@@ -833,16 +1480,23 @@ const handleResultClick = async (index) => {
                   />
                 </div>
                 <div>
-                  <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1"
-                    step="0.01"
-                    value={opacity}
-                    onChange={(e) => setOpacity(parseFloat(e.target.value))}
-                  />
+                  {interactionMode === 'select' && (
+                    <>
+                      <label>Mask Opacity: {Math.round(opacity * 100)}%</label>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1"
+                        step="0.01"
+                        value={opacity}
+                        onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                      />
+                    </>
+                    )}
+
                 </div>
+                
+                
               </div>
 
               <div>
@@ -856,12 +1510,32 @@ const handleResultClick = async (index) => {
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
                     onMouseOut={handleMouseUp}
+                    style={{ cursor: isPanning ? 'grabbing' : 'default' }}
                   />
                   <canvas
                     className='drawing-canvas'
                     ref={regionCanvasRefMask}
+                    style={{ 
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      pointerEvents: 'none'
+                    }}
                   />
                 </div>
+
+
+                {interactionMode === 'draw' && (
+                  <>
+                  <br/>
+                   In Draw Mode, move pointer to target area on mask and use scroll to zoom in/out.
+                   <br />
+                   Undo previous action using Ctrl+Z or Cmd+Z.
+                    <br />
+                    Hold shift and drag to pan in the mask.
+                  </>
+                )
+                }
               </div>
             </div>
 
@@ -870,6 +1544,7 @@ const handleResultClick = async (index) => {
                 interactionMode={interactionMode}
                 onToolChange={(tool) => {
                   if (tool == null){
+                    resetZoom();
                     setInteractionMode('select');
 
                     satelliteCanvasRef.current.style.opacity = 1;
@@ -878,10 +1553,7 @@ const handleResultClick = async (index) => {
                   }
                   else{
 
-
-                    console.log('Drawing tool selected:', tool);
                     setDrawingTool(tool);
-                    console.log("setting interaction mode")
                     setInteractionMode('draw');
                     satelliteCanvasRef.current.style.opacity = 0.2;
                     overlayCanvasRef.current.style.opacity = 0.2;
@@ -903,6 +1575,7 @@ const handleResultClick = async (index) => {
                 }}
                 onSave={onSave}
                 onClear={onClear}
+                onAutoBridge={bridgeSidewalkCrosswalkGaps}
               />
             </div>
 

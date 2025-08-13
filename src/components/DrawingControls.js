@@ -2,7 +2,7 @@ import { act, useState } from 'react';
 import { Square, Circle, Save, Trash, Hexagon } from 'lucide-react';
 import '../styles/drawingcontrols.css';
 
-const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear, onExit}) => {
+const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear, onAutoBridge}) => {
   const [activeTool, setActiveTool] = useState(null);
   const [activeColor, setActiveColor] = useState('blue');
 
@@ -93,8 +93,17 @@ const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave,
           <Trash size={16} />
           <span>Clear</span>
         </button>
-      </div>
 
+      </div>
+    
+      <button
+          disabled={interactionMode !== 'draw'}
+          className="auto-bridge-button"
+          onClick={onAutoBridge}
+          >
+          <span> Bridge Cross-Side Gaps </span>
+      </button>
+   
       <button 
         disabled={interactionMode !== 'draw'}
         className="exit-button"
