@@ -2,7 +2,7 @@
 
 This tool overlays image segmentation masks onto corresponding images to enable the labelling of segmentation quality.
 
-# Installation Instructions
+### Installation Instructions
 
 You need to have node and npm installed to run and setup the application. The instructions for the same should be available 
 
@@ -19,9 +19,16 @@ npx serve -s build
 ```
 Once the server is running, navigate to the link displayed in the terminal window to run the application. Select the directory which contains images and masks (directory structure instructions are below)
 
-# Directory Structure Instructions:
-
+### Directory Structure Instructions:
+```
+your_data_root/
+├── images/          # Satellite images
+└── annotations/     # Annotation images
+```
 You can choose the working directory by browsing to the appropriate folder. The expected structure of the directory is as follows:
 * It should contain an "images" folder which has the original images.
 * The segmentation masks should be in a folder titled "annotations" within the working directory.
 * The expected image format for both images and masks is .png, and the application expects that the corresponding images and segmentation masks share the exact same name.
+
+### Region Querying - 
+To use the region querying feature, install the required backend here [https://github.com/PariSolunke/AnnotationQCBackend], follow the instructions  and use the same directory above as the image root for the backend.
