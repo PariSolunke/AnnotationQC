@@ -872,8 +872,9 @@ const undoLastOperation = useCallback(async () => {
       const blob = await base64Response.blob();
       const formData = new FormData();
       formData.append('region_image', blob, 'region.jpg');
-
-      const response = await fetch('http://192.168.1.170:5000/api/process-region', {
+      formData.append('query_type', queryType);
+      
+      const response = await fetch('http://216.165.113.209:5000/api/process-region', {
         method: 'POST',
         body: formData,
       });
