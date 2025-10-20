@@ -7,6 +7,8 @@ import DrawingControls from './components/DrawingControls';
 import { flushSync } from 'react-dom';
 
 function App() {
+
+  
   const [folderHandle, setFolderHandle] = useState(null);
   const [message, setMessage] = useState('');
   const [showMessage, setShowMessage] = useState(false);
@@ -83,6 +85,23 @@ function App() {
     }
   }, []);
 
+
+  const getCanvasContext = (canvas, options = {}) => {
+    const ctx = canvas.getContext('2d', {
+      alpha: false,
+      willReadFrequently: true,
+      ...options
+    });
+    
+    // Disable all image smoothing for pixel-perfect rendering
+    ctx.imageSmoothingEnabled = false;
+    ctx.mozImageSmoothingEnabled = false;
+    ctx.webkitImageSmoothingEnabled = false;
+    ctx.msImageSmoothingEnabled = false;
+    
+    return ctx;
+  };
+  
 
   const handleFolderSelect = useCallback(async () => {
     try {
@@ -241,36 +260,28 @@ function App() {
   
 }, [interactionMode, zoomLevel, panOffset]);
 
-// Function to redraw canvas with image + all drawing operations
-const redrawCanvas = useCallback((canvas, zoom, offset) => {
-  if (!canvas || !imageURLs.mask) return;
-  
-  const ctx = canvas.getContext('2d');
-  const img = new Image();
-  
-  img.onload = () => {
-    // Clear the canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Function to redraw canvas with image + all drawing operations
+  const redrawCanvas = useCallback((canvas, zoom, offset) => {
+    if (!canvas || !imageURLs.mask) return;
     
-    // Save the current context state
-    ctx.save();
+    const ctx = getCanvasContext(canvas);
+    const img = new Image();
     
-    // Apply zoom and pan transformations
-    ctx.translate(offset.x, offset.y);
-    ctx.scale(zoom, zoom);
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(offset.x, offset.y);
+      ctx.scale(zoom, zoom);
+      
+      // Draw at ORIGINAL size (no scaling)
+      ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+      
+      redrawAllOperations(ctx);
+      ctx.restore();
+    };
     
-    // Draw the base image
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    
-    // Redraw all stored drawing operations
-    redrawAllOperations(ctx);
-    
-    // Restore the context state
-    ctx.restore();
-  };
-  
-  img.src = imageURLs.mask;
-}, [imageURLs.mask, drawingOperations]);
+    img.src = imageURLs.mask;
+  }, [imageURLs.mask, drawingOperations]);
 
   const redrawAllOperations = useCallback((ctx) => {
     drawingOperations.forEach(operation => {
@@ -351,10 +362,25 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
 
   // Convert screen coordinates to image coordinates
   const screenToImageCoords = useCallback((screenX, screenY) => {
-    const imageX = (screenX - panOffset.x) / zoomLevel;
-    const imageY = (screenY - panOffset.y) / zoomLevel;
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    
+    // Get the ratio between CSS size and internal canvas size
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;   // e.g., 512 / 400 = 1.28
+    const scaleY = canvas.height / rect.height;
+    
+    // Convert screen coords to canvas coords, accounting for CSS scaling
+    const canvasX = screenX * scaleX;
+    const canvasY = screenY * scaleY;
+    
+    // Then apply zoom/pan transformations
+    const imageX = (canvasX - panOffset.x) / zoomLevel;
+    const imageY = (canvasY - panOffset.y) / zoomLevel;
+    
     return { x: imageX, y: imageY };
   }, [zoomLevel, panOffset]);
+
 
   // Add panning functionality
   const handlePanStart = useCallback((e) => {
@@ -387,14 +413,13 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
   }, [isPanning, lastPanPoint, panOffset, zoomLevel, redrawCanvas]);
 
 
-    const drawPolygonPreview = useCallback(() => {
+  const drawPolygonPreview = useCallback(() => {
     if (!isDrawingPolygon || polygonPoints.length === 0) return;
     
     const canvas = regionCanvasRefMask.current;
     if (!canvas) return;
     
-    const ctx = canvas.getContext('2d');
-    
+    const ctx = getCanvasContext(canvas);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Apply zoom/pan transform
@@ -404,9 +429,8 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
     
     ctx.strokeStyle = drawingColor;
     ctx.fillStyle = drawingColor;
-    ctx.lineWidth = 2 / zoomLevel; // Scale line width inversely to maintain consistent appearance
+    ctx.lineWidth = 2 / zoomLevel;
     
-    // Draw lines between points
     if (polygonPoints.length > 0) {
       ctx.beginPath();
       ctx.moveTo(polygonPoints[0].x, polygonPoints[0].y);
@@ -415,7 +439,6 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
         ctx.lineTo(polygonPoints[i].x, polygonPoints[i].y);
       }
       
-      // If we have a temp point, draw line to it
       if (tempPolygonPoint) {
         ctx.lineTo(tempPolygonPoint.x, tempPolygonPoint.y);
       }
@@ -423,7 +446,6 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
       ctx.stroke();
     }
     
-    // Draw circles at each point - scale the radius inversely to maintain consistent size
     const pointRadius = 4 / zoomLevel;
     for (const point of polygonPoints) {
       ctx.beginPath();
@@ -431,7 +453,6 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
       ctx.fill();
     }
     
-    // Draw special indicator for first point when we can close the polygon
     if (polygonPoints.length > 2) {
       ctx.strokeStyle = '#ff0000';
       ctx.lineWidth = 2 / zoomLevel;
@@ -697,27 +718,19 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
   const redrawCanvasWithCurrentStroke = useCallback((canvas, zoom, offset, stroke) => {
     if (!canvas || !imageURLs.mask) return;
     
-    const ctx = canvas.getContext('2d');
+    const ctx = getCanvasContext(canvas);
     const img = new Image();
     
     img.onload = () => {
-      // Clear the canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Save the current context state
       ctx.save();
-      
-      // Apply zoom and pan transformations
       ctx.translate(offset.x, offset.y);
       ctx.scale(zoom, zoom);
       
-      // Draw the base image
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      // Redraw all stored operations
+      // Draw at ORIGINAL size
+      ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
       redrawAllOperations(ctx);
       
-      // Draw current stroke in progress
       if (stroke && stroke.points.length > 0) {
         ctx.strokeStyle = stroke.color;
         ctx.lineWidth = stroke.lineWidth;
@@ -727,14 +740,11 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
         if (stroke.points.length > 1) {
           ctx.beginPath();
           ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-          
           for (let i = 1; i < stroke.points.length; i++) {
             ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
           }
-          
           ctx.stroke();
         } else {
-          // Single point (dot)
           ctx.beginPath();
           ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.lineWidth / 2, 0, Math.PI * 2);
           ctx.fillStyle = stroke.color;
@@ -742,7 +752,6 @@ const redrawCanvas = useCallback((canvas, zoom, offset) => {
         }
       }
       
-      // Restore the context state
       ctx.restore();
     };
     
@@ -897,24 +906,20 @@ const undoLastOperation = useCallback(async () => {
 
   useEffect(() => {
     const syncRegionCanvas = (regionCanvas, imageCanvas) => {
-      
       if (regionCanvas && imageCanvas) {
-        // Set the region canvas to exactly match the displayed size of the image canvas
-        const rect = imageCanvas.getBoundingClientRect();
-        
-        // Set both internal and display dimensions to match
+        // Match internal dimensions exactly
         regionCanvas.width = imageCanvas.width;
         regionCanvas.height = imageCanvas.height;
+        
+        // Match CSS display dimensions
         regionCanvas.style.width = imageCanvas.style.width;
         regionCanvas.style.height = imageCanvas.style.height;
         
-        // Ensure the region canvas is positioned exactly over the image canvas
         regionCanvas.style.position = 'absolute';
         regionCanvas.style.top = '0';
         regionCanvas.style.left = '0';
         regionCanvas.style.pointerEvents = 'none';
       }
-      
     };
 
     if (imageURLs.satellite && imageURLs.mask) {
@@ -934,58 +939,54 @@ const undoLastOperation = useCallback(async () => {
           imageURLs.mask,
           imageURLs.overlay,
         ];
-  
+
         let imagesLoaded = 0;
         const totalImages = canvases.length;
-  
 
-  
         const imageLoaded = () => {
           imagesLoaded++;
           if (imagesLoaded === totalImages) {
-            // Sync all region canvases after all images are loaded
             for (let i = 0; i < canvases.length; i++) {
               syncRegionCanvas(regionCanvases[i], canvases[i]);
             }
           }
         };
-  
+
         canvases.forEach((canvas, index) => {
           if (!canvas) return;
-          const ctx = canvas.getContext('2d');
+          
+          const ctx = getCanvasContext(canvas);
           const img = new Image();
-  
+
           img.onload = () => {
+            // ===== KEY CONCEPT =====
+            // Internal dimensions = Original image (for data accuracy)
+            canvas.width = img.naturalWidth;    // e.g., 512
+            canvas.height = img.naturalHeight;  // e.g., 512
+            
+            // CSS dimensions = Scaled for display (for UI)
             const maxCanvasWidth = canvas.parentElement.clientWidth;
-            const aspectRatio = img.width / img.height;
-          
-            // Set canvas style dimensions
-            canvas.style.width = '100%';
-            canvas.style.height = 'auto';
-          
-            // Set internal canvas dimensions to fit image while preserving aspect ratio
-            canvas.width = maxCanvasWidth;
-            canvas.height = maxCanvasWidth / aspectRatio;
-          
-            // Clear previous content
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-          
-            // Draw scaled image
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          
+            const aspectRatio = img.naturalWidth / img.naturalHeight;
+            
+            canvas.style.width = `${maxCanvasWidth}px`;
+            canvas.style.height = `${maxCanvasWidth / aspectRatio}px`;
+            // =====================
+            
+            // Draw at original size (1:1 pixel mapping, no scaling)
+            ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+            
             if (index === 2) { // For overlay canvas
               const maskImg = new Image();
               maskImg.onload = () => {
                 ctx.globalAlpha = opacity;
-                ctx.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(maskImg, 0, 0, maskImg.naturalWidth, maskImg.naturalHeight);
                 ctx.globalAlpha = 1;
               };
               maskImg.src = imageURLs.mask;
             }
-          
+            
             imageLoaded();
           };
-          
           
           img.src = imageUrls[index];
         });
@@ -993,7 +994,6 @@ const undoLastOperation = useCallback(async () => {
       
       loadImageAndSync();
       
-      // Add window resize listener to handle responsive behavior
       const handleResize = () => {
         if (
           satelliteCanvasRef.current && 
@@ -1003,6 +1003,15 @@ const undoLastOperation = useCallback(async () => {
           regionCanvasRefMask.current && 
           regionCanvasRefOverlay.current
         ) {
+          // Update CSS display size on resize
+          const maxCanvasWidth = maskCanvasRef.current.parentElement.clientWidth;
+          const aspectRatio = maskCanvasRef.current.width / maskCanvasRef.current.height;
+          
+          [satelliteCanvasRef.current, maskCanvasRef.current, overlayCanvasRef.current].forEach(canvas => {
+            canvas.style.width = `${maxCanvasWidth}px`;
+            canvas.style.height = `${maxCanvasWidth / aspectRatio}px`;
+          });
+          
           syncRegionCanvas(regionCanvasRefSat.current, satelliteCanvasRef.current);
           syncRegionCanvas(regionCanvasRefMask.current, maskCanvasRef.current);
           syncRegionCanvas(regionCanvasRefOverlay.current, overlayCanvasRef.current);
@@ -1015,6 +1024,7 @@ const undoLastOperation = useCallback(async () => {
       };
     }
   }, [imageURLs, opacity]);
+
 
   useEffect(() => {
     drawRegionCanvas();
@@ -1349,43 +1359,42 @@ const undoLastOperation = useCallback(async () => {
   const onClear = async () => {
     clearAllOperations();
     resetZoom();
-    // Check if we have the necessary references
+    
     if (!maskCanvasRef.current || !images || currentIndex === undefined) {
       console.error("Missing required references for clearing");
       return;
     }
     
     try {
-      // Get the current image file pair
       const currentFilePair = images[currentIndex];
-      
-      // Get the annotation file again
       const annotationFile = await currentFilePair.annotation.getFile();
       
-      // Create a new image object from the original annotation file
       const img = new Image();
       img.src = URL.createObjectURL(annotationFile);
       
-      // When the image loads, draw it on the canvas
       img.onload = () => {
         const canvas = maskCanvasRef.current;
-        const ctx = canvas.getContext('2d');
+        const ctx = getCanvasContext(canvas);
         
-        // Clear the canvas first
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Set canvas to original dimensions
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
         
-        // Draw the original annotation image
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Maintain CSS display size
+        const maxCanvasWidth = canvas.parentElement.clientWidth;
+        const aspectRatio = img.naturalWidth / img.naturalHeight;
+        canvas.style.width = `${maxCanvasWidth}px`;
+        canvas.style.height = `${maxCanvasWidth / aspectRatio}px`;
         
-        // Clean up the object URL
+        // Draw at 1:1 scale
+        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+        
         URL.revokeObjectURL(img.src);
-        
         console.log("Canvas cleared and reset to original annotation");
       };
       
-      // clear ant temporary canvas contexts
       if (regionCanvasRefMask && regionCanvasRefMask.current) {
-        const tempCtx = regionCanvasRefMask.current.getContext('2d');
+        const tempCtx = getCanvasContext(regionCanvasRefMask.current);
         tempCtx.clearRect(0, 0, regionCanvasRefMask.current.width, regionCanvasRefMask.current.height);
       }
       
@@ -1394,7 +1403,6 @@ const undoLastOperation = useCallback(async () => {
       alert("Failed to reset the canvas. See console for details.");
     }
   };
-
 
     
   useEffect(() => {
