@@ -158,3 +158,43 @@ button.color-option:disabled span {
 button.color-option:disabled {
   cursor: not-allowed; /* Optional: visual feedback */
 }
+
+.shift-controls {
+  margin-top: 2px;
+  text-align: center;
+}
+
+.shift-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 1px;
+  margin-top: 1px;
+}
+
+.shift-button {
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 1px;
+  width: 15px;
+  height: 15px;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.shift-button:hover:not(:disabled) {
+  background: #0056b3;
+  transform: scale(1.05);
+}
+
+.shift-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.shift-horizontal {
+  display: flex;
+  gap: 4px;
+}

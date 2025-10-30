@@ -1,8 +1,8 @@
-import { act, useState } from 'react';
+import { useState } from 'react';
 import { Square, Circle, Save, Trash, Hexagon } from 'lucide-react';
 import '../styles/drawingcontrols.css';
 
-const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear, onAutoBridge}) => {
+const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave, onClear, onAutoBridge, onShift }) => {
   const [activeTool, setActiveTool] = useState(null);
   const [activeColor, setActiveColor] = useState('blue');
 
@@ -27,6 +27,12 @@ const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave,
     { label: 'Background', color: 'rgb(0, 0, 0)' },
     { label: 'Road', color: 'rgb(0, 128, 0)' } 
   ];
+
+  const handleShift = (direction) => {
+    if (onShift) {
+      onShift(direction);
+    }
+  };
 
   return (
     <div className="drawing-controls">
@@ -93,25 +99,64 @@ const DrawingControls = ({ interactionMode, onToolChange, onColorChange, onSave,
           <Trash size={16} />
           <span>Clear</span>
         </button>
-
       </div>
     
       <button
-          disabled={interactionMode !== 'draw'}
-          className="auto-bridge-button"
-          onClick={onAutoBridge}
-          >
-          <span> Bridge Cross-Side Gaps </span>
+        disabled={interactionMode !== 'draw'}
+        className="auto-bridge-button"
+        onClick={onAutoBridge}
+      >
+        <span> Bridge Cross-Side Gaps </span>
       </button>
+
+      {/* Pixel Shift Controls */}
+      <div className="shift-controls">
+        <h4>Shift Pixels</h4>
+        <div className="shift-buttons">
+          <button
+            disabled={interactionMode !== 'draw'}
+            className="shift-button"
+            onClick={() => handleShift('up')}
+            title="Shift Up"
+          >
+            ↑
+          </button>
+          <button
+            disabled={interactionMode !== 'draw'}
+            className="shift-button"
+            onClick={() => handleShift('left')}
+            title="Shift Left"
+          >
+            ←
+          </button>
+          <button
+            disabled={interactionMode !== 'draw'}
+            className="shift-button"
+            onClick={() => handleShift('right')}
+            title="Shift Right"
+          >
+            →
+          </button>
+          <button
+            disabled={interactionMode !== 'draw'}
+            className="shift-button"
+            onClick={() => handleShift('down')}
+            title="Shift Down"
+          >
+            ↓
+          </button>
+        </div>
+      </div>
+
    
       <button 
         disabled={interactionMode !== 'draw'}
         className="exit-button"
-        onClick={()=>{
+        onClick={() => {
           handleToolSelect(activeTool)
         }}
-        >
-          <span>Exit Drawing Mode</span>
+      >
+        <span>Exit Drawing Mode</span>
       </button>
     </div>
   );

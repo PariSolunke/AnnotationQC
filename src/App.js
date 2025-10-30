@@ -4,6 +4,8 @@ import ImagePreview from './components/ImagePreview';
 import './App.css';
 import SearchResults from './components/SearchResults';
 import DrawingControls from './components/DrawingControls';
+import ImageNavigationBar from './components/ImageNavigationBar';
+
 import { flushSync } from 'react-dom';
 
 function App() {
@@ -36,6 +38,7 @@ function App() {
   const [isDrawingPolygon, setIsDrawingPolygon] = useState(false);
   const [tempPolygonPoint, setTempPolygonPoint] = useState(null);
   const [isSelecting, setIsSelecting] = useState(false);
+  const [shiftOperations, setShiftOperations] = useState([]);
 
   const [interactionMode, setInteractionMode] = useState('select');
   
@@ -70,21 +73,31 @@ function App() {
   
   const loadFiles = useCallback(async (filePair) => {
     if (!filePair) return;
-  
+
     try {
+      // Revoke old blob URLs before creating new ones
+      if (imageURLs.satellite && imageURLs.satellite.startsWith('blob:')) {
+        URL.revokeObjectURL(imageURLs.satellite);
+      }
+      if (imageURLs.mask && imageURLs.mask.startsWith('blob:')) {
+        URL.revokeObjectURL(imageURLs.mask);
+      }
+      if (imageURLs.overlay && imageURLs.overlay.startsWith('blob:')) {
+        URL.revokeObjectURL(imageURLs.overlay);
+      }
+      
       const satelliteFile = await filePair.image.getFile();
       const annotationFile = await filePair.annotation.getFile();
-  
+
       setImageURLs({
         satellite: URL.createObjectURL(satelliteFile),
         mask: URL.createObjectURL(annotationFile),
-        overlay: URL.createObjectURL(satelliteFile), // initially overlay is satellite
+        overlay: URL.createObjectURL(satelliteFile),
       });
     } catch (error) {
       console.error("Error loading files:", error);
     }
-  }, []);
-
+  }, [imageURLs]);
 
   const getCanvasContext = (canvas, options = {}) => {
     const ctx = canvas.getContext('2d', {
@@ -102,6 +115,7 @@ function App() {
     return ctx;
   };
   
+
 
   const handleFolderSelect = useCallback(async () => {
     try {
@@ -260,6 +274,151 @@ function App() {
   
 }, [interactionMode, zoomLevel, panOffset]);
 
+
+  const redrawAllOperations = useCallback((ctx) => {
+    // Ensure smoothing is disabled before drawing operations
+    ctx.imageSmoothingEnabled = false;
+    
+    drawingOperations.forEach(operation => {
+      ctx.save();
+      
+      switch (operation.type) {
+        case 'brush':
+        case 'eraser':
+          ctx.strokeStyle = operation.color;
+          ctx.lineWidth = operation.lineWidth;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          // CRITICAL: Disable anti-aliasing for brush strokes
+          ctx.imageSmoothingEnabled = false;
+          
+          if (operation.points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(Math.round(operation.points[0].x), Math.round(operation.points[0].y));
+            
+            for (let i = 1; i < operation.points.length; i++) {
+              // Round coordinates to prevent sub-pixel rendering
+              ctx.lineTo(Math.round(operation.points[i].x), Math.round(operation.points[i].y));
+            }
+            
+            ctx.stroke();
+          } else if (operation.points.length === 1) {
+            // Single point (dot)
+            ctx.beginPath();
+            ctx.arc(
+              Math.round(operation.points[0].x), 
+              Math.round(operation.points[0].y), 
+              operation.lineWidth / 2, 
+              0, 
+              Math.PI * 2
+            );
+            ctx.fillStyle = operation.color;
+            ctx.fill();
+          }
+          break;
+          
+        case 'rectangle':
+          ctx.fillStyle = operation.color;
+          // Round rectangle coordinates to prevent anti-aliasing
+          ctx.fillRect(
+            Math.round(operation.x), 
+            Math.round(operation.y), 
+            Math.round(operation.width), 
+            Math.round(operation.height)
+          );
+          break;
+          
+        case 'polygon':
+          if (operation.points.length >= 3) {
+            ctx.fillStyle = operation.color;
+            ctx.beginPath();
+            ctx.moveTo(Math.round(operation.points[0].x), Math.round(operation.points[0].y));
+            
+            for (let i = 1; i < operation.points.length; i++) {
+              ctx.lineTo(Math.round(operation.points[i].x), Math.round(operation.points[i].y));
+            }
+            
+            ctx.closePath();
+            ctx.fill();
+          }
+          break;
+          
+        case 'bridge':
+          ctx.strokeStyle = operation.color;
+          ctx.lineWidth = operation.lineWidth;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.imageSmoothingEnabled = false;
+          
+          ctx.beginPath();
+          ctx.moveTo(Math.round(operation.startX), Math.round(operation.startY));
+          ctx.lineTo(Math.round(operation.endX), Math.round(operation.endY));
+          ctx.stroke();
+          break;
+      }
+      
+      ctx.restore();
+    });
+  }, [drawingOperations]);
+  
+  const applyShifts = (imageData, shifts) => {
+    let currentData = imageData;
+    
+    for (const direction of shifts) {
+      const width = currentData.width;
+      const height = currentData.height;
+      
+      // Create new image data with background color (black)
+      const newImageData = new ImageData(width, height);
+      
+      // Fill with background color (0, 0, 0, 255)
+      for (let i = 0; i < newImageData.data.length; i += 4) {
+        newImageData.data[i] = 0;     // R
+        newImageData.data[i + 1] = 0; // G
+        newImageData.data[i + 2] = 0; // B
+        newImageData.data[i + 3] = 255; // A
+      }
+      
+      // Copy pixels with offset based on direction
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          let sourceX = x;
+          let sourceY = y;
+          
+          switch (direction) {
+            case 'up':
+              sourceY = y + 1;
+              break;
+            case 'down':
+              sourceY = y - 1;
+              break;
+            case 'left':
+              sourceX = x + 1;
+              break;
+            case 'right':
+              sourceX = x - 1;
+              break;
+          }
+          
+          if (sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height) {
+            const sourceIdx = (sourceY * width + sourceX) * 4;
+            const targetIdx = (y * width + x) * 4;
+            
+            newImageData.data[targetIdx] = currentData.data[sourceIdx];
+            newImageData.data[targetIdx + 1] = currentData.data[sourceIdx + 1];
+            newImageData.data[targetIdx + 2] = currentData.data[sourceIdx + 2];
+            newImageData.data[targetIdx + 3] = currentData.data[sourceIdx + 3];
+          }
+        }
+      }
+      
+      currentData = newImageData;
+    }
+    
+    return currentData;
+  };
+
   // Function to redraw canvas with image + all drawing operations
   const redrawCanvas = useCallback((canvas, zoom, offset) => {
     if (!canvas || !imageURLs.mask) return;
@@ -276,6 +435,13 @@ function App() {
       // Draw at ORIGINAL size (no scaling)
       ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
       
+      // Apply shifts if any exist
+      if (shiftOperations.length > 0) {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const shiftedData = applyShifts(imageData, shiftOperations);
+        ctx.putImageData(shiftedData, 0, 0);
+      }
+      
       redrawAllOperations(ctx);
       ctx.restore();
     };
@@ -283,73 +449,42 @@ function App() {
     img.src = imageURLs.mask;
   }, [imageURLs.mask, drawingOperations]);
 
-  const redrawAllOperations = useCallback((ctx) => {
-    drawingOperations.forEach(operation => {
-      ctx.save();
+  const redrawCanvasWithShifts = useCallback((canvas, zoom, offset) => {
+    if (!canvas || !imageURLs.mask) return;
+    
+    const ctx = getCanvasContext(canvas);
+    const img = new Image();
+    
+    img.onload = () => {
+      // First, draw the image at normal size
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = img.naturalWidth;
+      tempCanvas.height = img.naturalHeight;
+      const tempCtx = getCanvasContext(tempCanvas);
+      tempCtx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
       
-      switch (operation.type) {
-        case 'brush':
-        case 'eraser':
-          ctx.strokeStyle = operation.color;
-          ctx.lineWidth = operation.lineWidth;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          
-          if (operation.points.length > 1) {
-            ctx.beginPath();
-            ctx.moveTo(operation.points[0].x, operation.points[0].y);
-            
-            for (let i = 1; i < operation.points.length; i++) {
-              ctx.lineTo(operation.points[i].x, operation.points[i].y);
-            }
-            
-            ctx.stroke();
-          } else if (operation.points.length === 1) {
-            // Single point (dot)
-            ctx.beginPath();
-            ctx.arc(operation.points[0].x, operation.points[0].y, operation.lineWidth / 2, 0, Math.PI * 2);
-            ctx.fillStyle = operation.color;
-            ctx.fill();
-          }
-          break;
-          
-        case 'rectangle':
-          ctx.fillStyle = operation.color;
-          ctx.fillRect(operation.x, operation.y, operation.width, operation.height);
-          break;
-          
-        case 'polygon':
-          if (operation.points.length >= 3) {
-            ctx.fillStyle = operation.color;
-            ctx.beginPath();
-            ctx.moveTo(operation.points[0].x, operation.points[0].y);
-            
-            for (let i = 1; i < operation.points.length; i++) {
-              ctx.lineTo(operation.points[i].x, operation.points[i].y);
-            }
-            
-            ctx.closePath();
-            ctx.fill();
-          }
-          break;
-          
-        case 'bridge':
-          // Handle bridge operations
-          ctx.strokeStyle = operation.color;
-          ctx.lineWidth = operation.lineWidth;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          
-          ctx.beginPath();
-          ctx.moveTo(operation.startX, operation.startY);
-          ctx.lineTo(operation.endX, operation.endY);
-          ctx.stroke();
-          break;
+      // Apply shifts to the temporary canvas
+      if (shiftOperations.length > 0) {
+        const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const shiftedData = applyShifts(imageData, shiftOperations);
+        tempCtx.putImageData(shiftedData, 0, 0);
       }
       
+      // Now draw to the main canvas with zoom/pan
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(offset.x, offset.y);
+      ctx.scale(zoom, zoom);
+      
+      ctx.drawImage(tempCanvas, 0, 0);
+      
+      redrawAllOperations(ctx);
       ctx.restore();
-    });
-  }, [drawingOperations]);
+    };
+    
+    img.src = imageURLs.mask;
+  }, [imageURLs.mask, shiftOperations, applyShifts, redrawAllOperations]);
+
 
   // Function to store a completed drawing operation
   const storeDrawingOperation = useCallback((operation) => {
@@ -722,13 +857,28 @@ function App() {
     const img = new Image();
     
     img.onload = () => {
+      // First, draw the image at normal size to a temp canvas
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = img.naturalWidth;
+      tempCanvas.height = img.naturalHeight;
+      const tempCtx = getCanvasContext(tempCanvas);
+      tempCtx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+      
+      // Apply shifts to the temporary canvas
+      if (shiftOperations.length > 0) {
+        const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const shiftedData = applyShifts(imageData, shiftOperations);
+        tempCtx.putImageData(shiftedData, 0, 0);
+      }
+      
+      // Now draw to main canvas with zoom/pan
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
       ctx.translate(offset.x, offset.y);
       ctx.scale(zoom, zoom);
       
-      // Draw at ORIGINAL size
-      ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight);
+      ctx.drawImage(tempCanvas, 0, 0);
+      
       redrawAllOperations(ctx);
       
       if (stroke && stroke.points.length > 0) {
@@ -756,25 +906,24 @@ function App() {
     };
     
     img.src = imageURLs.mask;
-  }, [imageURLs.mask, redrawAllOperations]);
+  }, [imageURLs.mask, redrawAllOperations, shiftOperations, applyShifts]);
 
+  const undoLastOperation = useCallback(async () => {
+    if (drawingOperations.length === 0) return;
+    
+    const lastOperation = drawingOperations[drawingOperations.length - 1];
+    
+    // Force synchronous state update
+    flushSync(() => {
+      if (lastOperation.type === 'bridge') {
+        setDrawingOperations(prev => prev.filter(op => op.type !== 'bridge'));
+      } else {
+        setDrawingOperations(prev => prev.slice(0, -1));
+      }
+    });
+    
 
-const undoLastOperation = useCallback(async () => {
-  if (drawingOperations.length === 0) return;
-  
-  const lastOperation = drawingOperations[drawingOperations.length - 1];
-  
-  // Force synchronous state update
-  flushSync(() => {
-    if (lastOperation.type === 'bridge') {
-      setDrawingOperations(prev => prev.filter(op => op.type !== 'bridge'));
-    } else {
-      setDrawingOperations(prev => prev.slice(0, -1));
-    }
-  });
-  
-
-}, [drawingOperations, redrawCanvas, zoomLevel, panOffset]);
+  }, [drawingOperations, redrawCanvas, zoomLevel, panOffset]);
 
 
   // Function to clear all drawing operations
@@ -796,9 +945,13 @@ const undoLastOperation = useCallback(async () => {
   // Effect to redraw canvas when images change
   useEffect(() => {
     if (maskCanvasRef.current && imageURLs.mask) {
-      redrawCanvas(maskCanvasRef.current, zoomLevel, panOffset);
+      if (shiftOperations.length > 0) {
+        redrawCanvasWithShifts(maskCanvasRef.current, zoomLevel, panOffset);
+      } else {
+        redrawCanvas(maskCanvasRef.current, zoomLevel, panOffset);
+      }
     }
-  }, [imageURLs.mask, zoomLevel, panOffset, redrawCanvas]);
+  }, [imageURLs.mask, zoomLevel, panOffset, redrawCanvas, redrawCanvasWithShifts, shiftOperations]);
 
   //  effect to handle global mouse events
   useEffect(() => {
@@ -903,6 +1056,18 @@ const undoLastOperation = useCallback(async () => {
       setStatus(`Error: ${error.message}`);
     }
   }, [drawnRegion]);
+
+  const shiftPixels = async (direction) => {
+    // Store the shift operation
+    setShiftOperations(prev => [...prev, direction]);
+  
+    
+    console.log(`Added shift operation: ${direction}`);
+  };
+
+
+
+
 
   useEffect(() => {
     const syncRegionCanvas = (regionCanvas, imageCanvas) => {
@@ -1026,36 +1191,36 @@ const undoLastOperation = useCallback(async () => {
   }, [imageURLs, opacity]);
 
 
+
   useEffect(() => {
     drawRegionCanvas();
   }, [drawRegionCanvas]);
 
   // Navigation handlers
-  const handleNext = async () => {
-    await resetZoomPromise();
-    setDrawingOperations([]);
 
-    if (currentIndex < images.length - 1) {
-      const newIndex = currentIndex + 1;
-      setCurrentIndex(newIndex);
+  const handleNavigateToIndex = async (index) => {
+    if (index >= 0 && index < images.length && index !== currentIndex) {
+      await resetZoomPromise();
+      setDrawingOperations([]);
+      setShiftOperations([]); // Add this line
+      
+      setCurrentIndex(index);
       setSearchResults([]);
       setStatus('Ready');
+      
+      await loadFiles(images[index]);
+    }
+  };
 
-      await loadFiles(images[newIndex]);
+  const handleNext = async () => {
+    if (currentIndex < images.length - 1) {
+      await handleNavigateToIndex(currentIndex + 1);
     }
   };
 
   const handlePrevious = async () => {
-    await resetZoomPromise();
-    setDrawingOperations([]);
-
     if (currentIndex > 0) {
-      const newIndex = currentIndex - 1;
-      setCurrentIndex(newIndex);
-      setSearchResults([]);
-      setStatus('Ready');
-
-      await loadFiles(images[newIndex]);
+      await handleNavigateToIndex(currentIndex - 1);
     }
   };
 
@@ -1317,44 +1482,136 @@ const undoLastOperation = useCallback(async () => {
     return 3; 
   };
 
+  const cleanupMaskPixels = (canvas) => {
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    
+    // Define expected colors
+    const expectedColors = {
+      sidewalk: { r: 0, g: 0, b: 255 },
+      crosswalk: { r: 255, g: 0, b: 0 },
+      background: { r: 0, g: 0, b: 0 },
+      road: { r: 0, g: 128, b: 0 }
+    };
+    
+    // Function to find nearest expected color
+    const findNearestColor = (r, g, b) => {
+      let minDistance = Infinity;
+      let nearestColor = { r: 0, g: 0, b: 0 }; // default to black
+      
+      for (const colorName in expectedColors) {
+        const expected = expectedColors[colorName];
+        const distance = Math.sqrt(
+          Math.pow(r - expected.r, 2) +
+          Math.pow(g - expected.g, 2) +
+          Math.pow(b - expected.b, 2)
+        );
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestColor = expected;
+        }
+      }
+      
+      return nearestColor;
+    };
+    
+    // Clean up each pixel
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      
+      // Check if pixel is already an expected color
+      const isExpected = 
+        (r === 0 && g === 0 && b === 255) ||     // Sidewalk
+        (r === 255 && g === 0 && b === 0) ||     // Crosswalk
+        (r === 0 && g === 0 && b === 0) ||       // Background
+        (r === 0 && g === 128 && b === 0);       // Road
+      
+      // If not an expected color, snap to nearest
+      if (!isExpected) {
+        const nearest = findNearestColor(r, g, b);
+        data[i] = nearest.r;
+        data[i + 1] = nearest.g;
+        data[i + 2] = nearest.b;
+        data[i + 3] = 255; // Ensure full opacity
+      }
+    }
+    
+    ctx.putImageData(imageData, 0, 0);
+  };
+
   const onSave = async () => {
     await resetZoomPromise();
-    // Check if we have the necessary references
-    if (!maskCanvasRef.current || !folderHandle || !images || !currentIndex) {
+    
+    if (!maskCanvasRef.current || !folderHandle || !images || currentIndex === undefined) {
       console.error("Missing required references for saving");
       return;
     }
-  
+
     try {
-      // Get the current image file pair
+      const canvas = maskCanvasRef.current;
+      
+      if (shiftOperations.length > 0) {
+        const ctx = getCanvasContext(canvas);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const shiftedData = applyShifts(imageData, shiftOperations);
+        ctx.putImageData(shiftedData, 0, 0);
+      }
+
+      // CRITICAL: Clean up any anti-aliased pixels before saving
+      cleanupMaskPixels(canvas);
+      
       const currentFilePair = images[currentIndex];
-      
-      // Get a reference to the annotations directory
       const annotationsFolder = await folderHandle.getDirectoryHandle('annotations', { create: false });
-      
-      // Get the file handle for the current annotation file
       const fileHandle = await annotationsFolder.getFileHandle(currentFilePair.annotation.name, { create: false });
       
-      // Convert canvas to blob
-      const canvas = maskCanvasRef.current;
-      const blob = await new Promise(resolve => {
-        canvas.toBlob(resolve, 'image/png');
+      // Save with maximum quality
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(
+          (blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Failed to create blob'));
+          },
+          'image/png',
+          1.0
+        );
       });
       
-      // Create a writable stream and write the blob data
       const writable = await fileHandle.createWritable();
       await writable.write(blob);
       await writable.close();
       
       console.log("Mask saved successfully!");
       
-      // Show a success message to the user
+      // CRITICAL FIX: Revoke old blob URLs and create new ones from the saved file
+      if (imageURLs.mask) {
+        URL.revokeObjectURL(imageURLs.mask);
+      }
+      if (imageURLs.overlay) {
+        URL.revokeObjectURL(imageURLs.overlay);
+      }
+      
+      // Reload the file to get fresh blob URLs
+      const savedAnnotationFile = await fileHandle.getFile();
+      const satelliteFile = await currentFilePair.image.getFile();
+      
+      setImageURLs({
+        satellite: imageURLs.satellite, // Keep satellite unchanged
+        mask: URL.createObjectURL(savedAnnotationFile),
+        overlay: URL.createObjectURL(satelliteFile),
+      });
+      
       alert("Mask saved successfully!");
+      
     } catch (error) {
       console.error("Error saving the mask:", error);
       alert("Failed to save the mask. See console for details.");
     }
   };
+
 
   const onClear = async () => {
     clearAllOperations();
@@ -1433,6 +1690,26 @@ const undoLastOperation = useCallback(async () => {
     };
   }, [handleWheel, interactionMode]);
 
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      // Don't trigger if user is typing in an input field
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+        return;
+      }
+      
+      // Arrow key navigation
+      if (e.key === 'ArrowRight' && currentIndex < images.length - 1) {
+        handleNext();
+      } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
+        handlePrevious();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [currentIndex, images.length, handleNext, handlePrevious]);
+
+
   return (
     <div className="App">
       <h1>Multi-Image Annotation and Similarity Search</h1>
@@ -1443,6 +1720,15 @@ const undoLastOperation = useCallback(async () => {
 
       {folderHandle && (
         <>
+          <ImageNavigationBar
+            images={images}
+            currentIndex={currentIndex}
+            csvData={csvData}
+            onNavigate={handleNavigateToIndex}
+            onPrevious={handlePrevious}
+            onNext={handleNext}
+          />
+
           <div className="top-container">
 
             <ImagePreview 
@@ -1585,23 +1871,13 @@ const undoLastOperation = useCallback(async () => {
                 onSave={onSave}
                 onClear={onClear}
                 onAutoBridge={bridgeSidewalkCrosswalkGaps}
+                onShift={shiftPixels} 
               />
             </div>
 
             <div></div>
 
             <div>
-
-            <div className="controls">
-              <button onClick={handlePrevious} disabled={currentIndex === 0}>
-                Previous
-              </button>
-              <button onClick={handleNext} disabled={currentIndex === images.length - 1}>
-                Next
-              </button>
-
-            </div>
-
 
               <div className="evaluation">
                 <button onClick={handleMatch}>Report Match</button>
